@@ -1,7 +1,8 @@
 /**
- * ╦═╗╦╔═╗╔╦╗
- * ╠╦╝║╠╣  ║   Ultra-low latency encrypted networking
- * ╩╚═╩╚   ╩   for real-time games
+ * ╔═╗╔═╗╔═╗╔╦╗╔╗╔╔═╗╔╦╗
+ * ╠╣ ╠═╣╚═╗ ║ ║║║║╣  ║   Ultra-low latency encrypted networking
+ * ╚  ╩ ╩╚═╝ ╩ ╝╚╝╚═╝ ╩   for real-time games
+ *
  *
  * FastNet Network Library - C/C++ API
  * 
