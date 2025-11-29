@@ -129,7 +129,7 @@ async fn main() -> std::io::Result<()> {
 ### Building the Library
 
 ```Cargo.toml
-fastnet = {version = "0.1.3", features = ["ffi"]}
+fastnet = { version = "0.1.3", features = ["ffi"] }
 ```
 ```fish
 cargo build --release --features ffi
