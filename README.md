@@ -27,24 +27,25 @@
 
 Tested with 50,000 packets at 10,000 packets/second on localhost:
 
-| Metric | FastNet | ENet | QUIC |
-|--------|------|------|------|
-| **Avg Latency** | **15.6 µs** | 112.7 µs | 64.0 µs |
-| **Median** | **13.5 µs** | 112.0 µs | 63.0 µs |
-| **P99** | **69.6 µs** | 143.0 µs | 170.0 µs |
-| **Encryption** | ✅ ChaCha20 | ❌ None | ✅ TLS |
-| **Packet Loss** | 0.00% | 0.00% | 0.00% |
+| Metric | ENet | FastNet | QUIC |
+|--------|------|---------|------|
+| **Avg Latency** | 112.7 µs | **15.6 µs** | 64.0 µs |
+| **P99 Latency** | 143.0 µs | **69.6 µs** | 170.0 µs |
+| **Max Latency** | **323 µs** | 1216 µs | 1868 µs |
+| **Encryption** | None | ChaCha20 | TLS |
 
 ```
-Latency Comparison (lower is better)
+Average Latency (lower is better)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FastNet         ████ 15.6 µs ⚡
-QUIC         █████████████████ 64.0 µs
-ENet         ██████████████████████████████ 112.7 µs
+FastNet      ██ 15.6 µs ⚡
+QUIC         ████████ 64.0 µs
+ENet         ██████████████ 112.7 µs
 ```
 
 > **7x faster** than ENet with full encryption enabled
+>
+> *Note: Max latency spikes in FastNet/QUIC are due to TLS overhead during handshake*
 
 ---
 
