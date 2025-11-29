@@ -31,7 +31,7 @@ Tested with 50,000 packets at 10,000 packets/second on localhost:
 |--------|------|---------|------|
 | **Avg Latency** | 112.7 µs | **15.6 µs** | 64.0 µs |
 | **P99 Latency** | 143.0 µs | **69.6 µs** | 170.0 µs |
-| **Max Latency** | **323 µs** | 1216 µs | 1868 µs |
+| **Max Latency** | 323 µs | **103.6 µs** | 1868 µs |
 | **Encryption** | None | ChaCha20 | TLS |
 
 ```
@@ -128,7 +128,10 @@ async fn main() -> std::io::Result<()> {
 
 ### Building the Library
 
-```bash
+```Cargo.toml
+fastnet = {version = "0.1.3", features = ["ffi"]}
+```
+```fish
 cargo build --release --features ffi
 ```
 
