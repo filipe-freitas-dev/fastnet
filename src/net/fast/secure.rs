@@ -278,10 +278,26 @@ impl SecureSocket {
         Ok(sock)
     }
 
+    /// Returns the local UDP address this socket is bound to.
+    ///
+    /// This is the address used for encrypted game data after the TLS handshake.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fastnet::SecureSocket;
+    /// # async fn example(socket: &SecureSocket) {
+    /// let addr = socket.local_udp_addr().unwrap();
+    /// println!("Listening on UDP: {}", addr);
+    /// # }
+    /// ```
     pub fn local_udp_addr(&self) -> io::Result<SocketAddr> {
         self.socket.local_addr()
     }
 
+    /// Returns the local TCP address used for TLS handshakes (server only).
+    ///
+    /// Returns `None` for client sockets.
     pub fn local_tcp_addr(&self) -> io::Result<Option<SocketAddr>> {
         self.tls_listener.as_ref().map(|l| l.local_addr()).transpose()
     }
@@ -334,6 +350,35 @@ impl SecureSocket {
         Ok(Some(peer_id))
     }
 
+    /// Sends data to a connected peer.
+    ///
+    /// # Parameters
+    ///
+    /// - `peer_id`: The target peer's ID (from `SecureEvent::Connected`)
+    /// - `channel_id`: Channel to send on (0-255)
+    /// - `data`: The payload to send
+    ///
+    /// # Channels
+    ///
+    /// Different channels can have different reliability modes:
+    /// - Channel 0: Reliable ordered (default)
+    /// - Channel 1: Unreliable
+    /// - Channel 2: Reliable unordered
+    /// - Channel 3: Unreliable sequenced
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fastnet::SecureSocket;
+    /// # async fn example(socket: &mut SecureSocket, peer_id: u16) {
+    /// // Send on reliable channel
+    /// socket.send(peer_id, 0, b"Hello!".to_vec()).await.unwrap();
+    ///
+    /// // Send position update on unreliable channel
+    /// socket.send(peer_id, 1, position_bytes).await.unwrap();
+    /// # let position_bytes = vec![];
+    /// # }
+    /// ```
     pub async fn send(&mut self, peer_id: u16, channel_id: u8, data: Vec<u8>) -> io::Result<()> {
         let peer = self.peers.get_mut(&peer_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Peer not found"))?;
@@ -363,6 +408,38 @@ impl SecureSocket {
         Ok(())
     }
 
+    /// Polls for network events.
+    ///
+    /// This method should be called regularly (e.g., every frame) to:
+    /// - Accept new connections (server)
+    /// - Receive incoming data
+    /// - Detect disconnections
+    ///
+    /// # Returns
+    ///
+    /// A vector of events that occurred since the last poll.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fastnet::{SecureSocket, SecureEvent};
+    /// # async fn example(socket: &mut SecureSocket) {
+    /// for event in socket.poll().await? {
+    ///     match event {
+    ///         SecureEvent::Connected(peer_id) => {
+    ///             println!("Peer {} connected", peer_id);
+    ///         }
+    ///         SecureEvent::Data(peer_id, channel, data) => {
+    ///             println!("Received {} bytes from peer {}", data.len(), peer_id);
+    ///         }
+    ///         SecureEvent::Disconnected(peer_id) => {
+    ///             println!("Peer {} disconnected", peer_id);
+    ///         }
+    ///     }
+    /// }
+    /// # Ok::<(), std::io::Error>(())
+    /// # }
+    /// ```
     pub async fn poll(&mut self) -> io::Result<Vec<SecureEvent>> {
 
         loop {
@@ -496,10 +573,17 @@ impl SecureSocket {
         Ok(())
     }
 
+    /// Returns the number of currently connected peers.
     pub fn peer_count(&self) -> usize {
         self.peers.len()
     }
 
+    /// Returns the estimated round-trip time for a peer.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Duration)` if the peer exists and RTT has been measured
+    /// - `None` if the peer doesn't exist
     pub fn peer_rtt(&self, peer_id: u16) -> Option<Duration> {
         self.peers.get(&peer_id).map(|p| p.peer.rtt())
     }

@@ -1,4 +1,6 @@
-//! Packet format and constants for the Rift protocol.
+//! Packet format and constants for the FastNet protocol.
+//!
+#![allow(dead_code)] // Internal API - some items reserved for future protocol extensions
 //!
 //! # Packet Structure
 //!
@@ -355,7 +357,7 @@ mod tests {
         assert_eq!(fragments.len(), 4);
 
         let mut assembler = FragmentAssembler::new(fragments[0].0, fragments[0].2);
-        for (id, idx, _, chunk) in &fragments {
+        for (_id, idx, _, chunk) in &fragments {
             let complete = assembler.add(*idx, chunk);
             if *idx == 3 {
                 assert!(complete);

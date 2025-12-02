@@ -6,6 +6,8 @@
 //! - Channel management per peer
 //! - Timeout and keepalive handling
 
+#![allow(dead_code)] // Internal API - some methods reserved for future use
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};

@@ -1,6 +1,6 @@
 //! Channel types and message reliability handling.
 //!
-//! Rift supports multiple channel types for different use cases:
+//! FastNet supports multiple channel types for different use cases:
 //!
 //! | Channel Type | Reliable | Ordered | Use Case |
 //! |--------------|----------|---------|----------|
@@ -8,6 +8,8 @@
 //! | UnreliableSequenced | ❌ | Latest | Input, voice chat |
 //! | Reliable | ✅ | ❌ | Item pickups, damage events |
 //! | ReliableOrdered | ✅ | ✅ | Chat, commands, state sync |
+
+#![allow(dead_code)] // Internal API - some fields/methods reserved for future use
 
 use std::collections::VecDeque;
 
