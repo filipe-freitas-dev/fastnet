@@ -128,9 +128,20 @@ async fn main() -> std::io::Result<()> {
 
 ### Building the Library
 
+Add the crate into your project:
+
 ```Cargo.toml
 fastnet = { version = "0.1.3", features = ["ffi"] }
 ```
+
+or clone the repo into your machine:
+
+```fish
+git clone https://github.com/filipe-freitas-dev/fastnet.git
+```
+
+then build the C/C++ wrapper with:
+
 ```fish
 cargo build --release --features ffi
 ```
