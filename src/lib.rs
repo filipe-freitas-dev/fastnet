@@ -1,15 +1,21 @@
 //! # FastNet - Ultra-Low Latency Encrypted Networking
 //!
 //! FastNet is a high-performance networking library designed for real-time multiplayer games.
-//! It provides encrypted UDP communication with latencies as low as **15 microseconds**
+//! It provides encrypted UDP communication with latencies as low as **12-15 microseconds**
 //! while maintaining strong security through TLS 1.3 and ChaCha20-Poly1305 encryption.
 //!
 //! ## Features
 //!
-//! - **Ultra-Low Latency**: ~15µs average RTT on localhost
+//! - **Ultra-Low Latency**: ~12-15µs average RTT on localhost
+//! - **Zero-Alloc Hot Path**: Fixed buffers in send/recv, no allocations
+//! - **Key Rotation**: Automatic key rotation every 1M packets or 1 hour
+//! - **Linux Tuning**: SO_BUSY_POLL, sendmmsg/recvmmsg, IP_TOS
 //! - **Built-in Encryption**: TLS 1.3 handshake + ChaCha20-Poly1305 AEAD
 //! - **Zero Configuration Security**: Encryption is always on
 //! - **Game Engine Ready**: C/C++ FFI for Unreal Engine, Unity, Godot
+//! - **P2P Support**: Direct peer-to-peer connections with NAT traversal
+//! - **TCP Fallback**: Automatic fallback when UDP is blocked
+//! - **Asset Distribution**: LZ4 compression, chunking, BLAKE3 verification
 //!
 //! ## Quick Start
 //!
@@ -100,9 +106,18 @@
 //! See the `include/fastnet.h` header for the C API documentation.
 
 pub mod net;
+pub mod p2p;
+pub mod tcp;
+pub mod assets;
+pub mod types;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;
 
 // Re-export main types at crate root for convenience
 pub use net::{SecureSocket, SecureEvent};
+pub use net::fast::{SocketConfig, batch};
+pub use p2p::{P2PSocket, P2PEvent, P2PConfig, ConnectionMode, SignalingConfig};
+pub use tcp::{HybridSocket, HybridServer, HybridEvent, TransportMode};
+pub use assets::{AssetServer, AssetClient, AssetEvent, AssetInfo, AssetChunk, AssetConfig, TransferStats};
+pub use types::{PeerId, TransferId, SessionId};

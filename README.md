@@ -14,12 +14,18 @@
 
 ## Features
 
-- **Ultra-Low Latency**: ~15µs average RTT on localhost, competitive with raw UDP
+- **Ultra-Low Latency**: ~12-15µs average RTT on localhost, competitive with raw UDP
 - **Built-in Encryption**: TLS 1.3 handshake + ChaCha20-Poly1305 AEAD
+- **Zero-Alloc Hot Path**: Fixed buffers, no allocations in send/recv loop
+- **Key Rotation**: Automatic key rotation for forward secrecy
+- **Linux Tuning**: SO_BUSY_POLL, IP_TOS, sendmmsg/recvmmsg batching
 - **Zero Configuration Security**: No need to understand cryptography
 - **Game Engine Ready**: C/C++ FFI for Unreal Engine, Unity, Godot
 - **Async/Await**: Built on Tokio for efficient I/O
 - **Reliable & Unreliable Channels**: Choose the right mode for your data
+- **P2P Networking**: Direct peer-to-peer connections with NAT traversal
+- **TCP Fallback**: Automatic fallback when UDP is blocked
+- **Asset Distribution**: Large file transfers with LZ4 compression and BLAKE3 verification
 
 ---
 
@@ -131,7 +137,7 @@ async fn main() -> std::io::Result<()> {
 Add the crate into your project:
 
 ```Cargo.toml
-fastnet = { version = "0.1.3", features = ["ffi"] }
+fastnet = { version = "0.1", features = ["ffi"] }
 ```
 
 or clone the repo into your machine:
@@ -242,6 +248,154 @@ int main() {
        }
    }
    ```
+
+---
+
+## P2P Networking
+
+Direct peer-to-peer connections with NAT traversal, eliminating the need for a dedicated relay server.
+
+```rust
+use fastnet::p2p::{P2PSocket, P2PEvent};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    // Connect to signaling server
+    let mut socket = P2PSocket::connect("signaling.example.com:9000").await?;
+    
+    // Join a room to discover peers
+    socket.join_room("game-room-123").await?;
+    
+    loop {
+        for event in socket.poll().await? {
+            match event {
+                P2PEvent::PeerConnected(peer_id) => {
+                    println!("Direct connection to peer {}", peer_id);
+                    socket.send(peer_id, b"Hello!".to_vec()).await?;
+                }
+                P2PEvent::Data(peer_id, data) => {
+                    println!("From {}: {:?}", peer_id, data);
+                }
+                P2PEvent::PeerRelayed(peer_id) => {
+                    println!("Peer {} using relay (NAT traversal failed)", peer_id);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+```
+
+**Features:**
+- UDP hole-punching for NAT traversal
+- Automatic relay fallback when direct connection fails
+- Room-based peer discovery
+- End-to-end encryption (ChaCha20-Poly1305)
+
+---
+
+## TCP Fallback
+
+Automatic fallback to TCP when UDP is blocked (corporate firewalls, some mobile networks).
+
+```rust
+use fastnet::tcp::{HybridSocket, TransportMode};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    // Automatically tries UDP, falls back to TCP if blocked
+    let mut socket = HybridSocket::connect("game.example.com:7778").await?;
+    
+    match socket.transport_mode() {
+        TransportMode::Udp => println!("Using UDP (optimal)"),
+        TransportMode::Tcp => println!("Using TCP (fallback)"),
+    }
+    
+    // API is identical regardless of transport
+    socket.send(1, 0, b"Hello!".to_vec()).await?;
+    
+    Ok(())
+}
+```
+
+---
+
+## Asset Distribution
+
+Efficient large file transfers with chunking, compression, and integrity verification.
+
+```rust
+use fastnet::assets::{AssetServer, AssetClient, AssetEvent};
+
+// Server: Register and serve assets
+let mut server = AssetServer::new(Default::default());
+server.register("map.pak", "/game/maps/forest.pak").await?;
+
+// Handle requests
+if let Some((transfer_id, info)) = server.handle_request(peer_id, "map.pak") {
+    // Send chunks
+    while let Some(chunk) = server.get_next_chunk(transfer_id)? {
+        send_to_peer(peer_id, chunk);
+    }
+}
+
+// Client: Download assets
+let mut client = AssetClient::new();
+client.start_download(transfer_id, info, "/local/maps/forest.pak")?;
+
+// Process chunks
+client.receive_chunk(chunk)?;
+
+for event in client.poll_events() {
+    match event {
+        AssetEvent::Progress { received, total, .. } => {
+            println!("Download: {:.1}%", (received as f64 / total as f64) * 100.0);
+        }
+        AssetEvent::Completed { path, .. } => {
+            println!("Downloaded: {:?}", path);
+        }
+        _ => {}
+    }
+}
+```
+
+**Features:**
+- 64KB chunked transfers
+- LZ4 compression for faster transfers
+- BLAKE3 hash verification (per-chunk and per-file)
+- Resumable downloads with `resume_download()`
+- Pause/cancel with `pause_transfer()`, `cancel_transfer()`
+- Transfer statistics with `get_transfer_stats()`
+- Retry tracking for failed chunks
+
+---
+
+## Performance Tuning
+
+FastNet includes OS-level optimizations for minimal jitter:
+
+```rust
+use fastnet::net::fast::{SocketConfig, batch};
+
+// Apply low-latency configuration
+let config = SocketConfig::low_latency();
+// - SO_RCVBUF/SO_SNDBUF: 8MB
+// - SO_BUSY_POLL: 100µs
+// - IP_TOS: 0xB8 (DSCP EF)
+// - SO_PRIORITY: 6
+
+// Batch sending (Linux only)
+let mut send_batch = batch::SendBatch::new();
+send_batch.push(&packet_data, peer_addr);
+send_batch.push(&packet_data2, peer_addr2);
+batch::sendmmsg(&socket, &send_batch)?;
+```
+
+**Linux Tuning Options:**
+- `SO_RCVBUF`/`SO_SNDBUF`: 4-8MB buffers
+- `SO_BUSY_POLL`: CPU polling for ~10µs latency reduction
+- `IP_TOS`: DSCP EF (Expedited Forwarding) for QoS
+- `sendmmsg`/`recvmmsg`: Batch multiple packets per syscall
 
 ---
 

@@ -11,10 +11,13 @@
 //! - `channel` - Reliability and ordering modes
 //! - `peer` - Connection state and RTT estimation
 //! - `secure` - TLS handshake and ChaCha20-Poly1305 encryption
+//! - `tuning` - Socket tuning and OS-level optimizations
 
 mod packet;
 mod channel;
 mod peer;
 mod secure;
+pub mod tuning;
 
 pub use secure::{SecureSocket, SecureEvent};
+pub use tuning::{SocketConfig, batch};

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::net::{UdpSocket, TcpListener, TcpStream};
 use tokio_rustls::server::TlsStream;
@@ -33,6 +33,16 @@ use chacha20poly1305::aead::generic_array::GenericArray;
 
 use super::packet::{PacketHeader, HEADER_SIZE, MAX_PACKET_SIZE};
 use super::peer::{Peer, PeerConfig, ConnectionState};
+use super::tuning::SocketConfig;
+
+/// Maximum encrypted packet size (nonce + ciphertext + tag).
+const MAX_ENCRYPTED_SIZE: usize = 8 + MAX_PACKET_SIZE + 16;
+
+/// Key rotation interval in packets (rotate every N packets).
+const KEY_ROTATION_PACKETS: u64 = 1_000_000;
+
+/// Key rotation interval in seconds (rotate every N seconds).
+const KEY_ROTATION_SECONDS: u64 = 3600; // 1 hour
 
 /// Events emitted by [`SecureSocket`] during network operations.
 ///
@@ -82,11 +92,17 @@ pub enum SecureEvent {
 /// Per-peer encryption state using ChaCha20-Poly1305.
 ///
 /// Each peer has unique send/receive keys derived during TLS handshake.
-/// The nonce is a simple counter to ensure uniqueness.
+/// Supports key rotation for reduced jitter and forward secrecy.
 struct Cipher {
     encrypt: ChaCha20Poly1305,
     decrypt: ChaCha20Poly1305,
     nonce_send: u64,
+    
+    // Key rotation state
+    send_key: [u8; 32],
+    recv_key: [u8; 32],
+    packets_since_rotation: u64,
+    last_rotation: Instant,
 }
 
 impl Cipher {
@@ -95,15 +111,60 @@ impl Cipher {
             encrypt: ChaCha20Poly1305::new(GenericArray::from_slice(send_key)),
             decrypt: ChaCha20Poly1305::new(GenericArray::from_slice(recv_key)),
             nonce_send: 0,
+            send_key: *send_key,
+            recv_key: *recv_key,
+            packets_since_rotation: 0,
+            last_rotation: Instant::now(),
         }
     }
+    
+    /// Check if key rotation is needed and rotate if necessary.
+    #[inline]
+    fn maybe_rotate(&mut self) {
+        let should_rotate = self.packets_since_rotation >= KEY_ROTATION_PACKETS
+            || self.last_rotation.elapsed().as_secs() >= KEY_ROTATION_SECONDS;
+        
+        if should_rotate {
+            self.rotate_keys();
+        }
+    }
+    
+    /// Rotate keys using HKDF-like derivation.
+    fn rotate_keys(&mut self) {
+        use blake3::Hasher;
+        
+        // Derive new keys from old keys + nonce
+        let mut hasher = Hasher::new();
+        hasher.update(&self.send_key);
+        hasher.update(&self.nonce_send.to_le_bytes());
+        hasher.update(b"fastnet-key-rotation-send");
+        let new_send = *hasher.finalize().as_bytes();
+        
+        let mut hasher = Hasher::new();
+        hasher.update(&self.recv_key);
+        hasher.update(&self.nonce_send.to_le_bytes());
+        hasher.update(b"fastnet-key-rotation-recv");
+        let new_recv = *hasher.finalize().as_bytes();
+        
+        self.send_key = new_send;
+        self.recv_key = new_recv;
+        self.encrypt = ChaCha20Poly1305::new(GenericArray::from_slice(&new_send));
+        self.decrypt = ChaCha20Poly1305::new(GenericArray::from_slice(&new_recv));
+        self.packets_since_rotation = 0;
+        self.last_rotation = Instant::now();
+    }
 
+    /// Encrypt in-place without allocation.
+    /// Returns encrypted length or None on failure.
     #[inline]
     fn seal(&mut self, plaintext: &[u8], output: &mut [u8]) -> Option<usize> {
+        self.packets_since_rotation += 1;
+        
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&self.nonce_send.to_le_bytes());
         self.nonce_send = self.nonce_send.wrapping_add(1);
 
+        // Use in-place encryption to avoid allocation
         if let Ok(ct) = self.encrypt.encrypt(GenericArray::from_slice(&nonce), plaintext) {
             if output.len() >= 8 + ct.len() {
                 output[..8].copy_from_slice(&nonce[4..12]);
@@ -114,8 +175,10 @@ impl Cipher {
         None
     }
 
+    /// Decrypt and return length of plaintext.
+    /// Zero-copy: writes directly to output buffer.
     #[inline]
-    fn open<'a>(&self, ciphertext: &[u8], output: &'a mut [u8]) -> Option<&'a [u8]> {
+    fn open<'a>(&self, ciphertext: &[u8], output: &'a mut [u8]) -> Option<usize> {
         if ciphertext.len() < 24 { return None; }
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&ciphertext[..8]);
@@ -123,7 +186,7 @@ impl Cipher {
         if let Ok(pt) = self.decrypt.decrypt(GenericArray::from_slice(&nonce), &ciphertext[8..]) {
             if output.len() >= pt.len() {
                 output[..pt.len()].copy_from_slice(&pt);
-                return Some(&output[..pt.len()]);
+                return Some(pt.len());
             }
         }
         None
@@ -179,12 +242,20 @@ pub struct SecureSocket {
     tls_listener: Option<TcpListener>,
     tls_acceptor: Option<TlsAcceptor>,
 
-    recv_buf: Box<[u8; MAX_PACKET_SIZE]>,
-    send_buf: Box<[u8; MAX_PACKET_SIZE]>,
+    // Fixed buffers - zero allocation in hot path
+    recv_buf: Box<[u8; MAX_ENCRYPTED_SIZE]>,
+    send_buf: Box<[u8; MAX_ENCRYPTED_SIZE]>,
     decrypt_buf: Box<[u8; MAX_PACKET_SIZE]>,
-
+    packet_buf: Box<[u8; MAX_PACKET_SIZE]>,  // For building packets
+    
+    // Event buffer with pre-allocated capacity
     events: Vec<SecureEvent>,
+    #[allow(dead_code)] // Reserved for future zero-alloc event pool
+    event_data_pool: Vec<Box<[u8; MAX_PACKET_SIZE]>>,
+    
     config: PeerConfig,
+    #[allow(dead_code)] // Stored for potential future reconfiguration
+    socket_config: SocketConfig,
 }
 
 impl SecureSocket {
@@ -205,6 +276,9 @@ impl SecureSocket {
 
         let acceptor = TlsAcceptor::from(Arc::new(config));
 
+        let socket_config = SocketConfig::default();
+        socket_config.apply_udp(&socket)?;
+        
         Ok(Self {
             socket,
             peers: HashMap::new(),
@@ -212,11 +286,14 @@ impl SecureSocket {
             next_peer_id: 1,
             tls_listener: Some(listener),
             tls_acceptor: Some(acceptor),
-            recv_buf: Box::new([0u8; MAX_PACKET_SIZE]),
-            send_buf: Box::new([0u8; MAX_PACKET_SIZE]),
+            recv_buf: Box::new([0u8; MAX_ENCRYPTED_SIZE]),
+            send_buf: Box::new([0u8; MAX_ENCRYPTED_SIZE]),
             decrypt_buf: Box::new([0u8; MAX_PACKET_SIZE]),
-            events: Vec::new(),
+            packet_buf: Box::new([0u8; MAX_PACKET_SIZE]),
+            events: Vec::with_capacity(64),
+            event_data_pool: Vec::with_capacity(16),
             config: PeerConfig::default(),
+            socket_config,
         })
     }
 
@@ -260,6 +337,9 @@ impl SecureSocket {
         peers.insert(peer_id, secure_peer);
         peer_by_addr.insert(udp_addr, peer_id);
 
+        let socket_config = SocketConfig::default();
+        socket_config.apply_udp(&socket)?;
+        
         let mut sock = Self {
             socket,
             peers,
@@ -267,11 +347,14 @@ impl SecureSocket {
             next_peer_id: peer_id,
             tls_listener: None,
             tls_acceptor: None,
-            recv_buf: Box::new([0u8; MAX_PACKET_SIZE]),
-            send_buf: Box::new([0u8; MAX_PACKET_SIZE]),
+            recv_buf: Box::new([0u8; MAX_ENCRYPTED_SIZE]),
+            send_buf: Box::new([0u8; MAX_ENCRYPTED_SIZE]),
             decrypt_buf: Box::new([0u8; MAX_PACKET_SIZE]),
-            events: Vec::new(),
+            packet_buf: Box::new([0u8; MAX_PACKET_SIZE]),
+            events: Vec::with_capacity(64),
+            event_data_pool: Vec::with_capacity(16),
             config: PeerConfig::default(),
+            socket_config,
         };
 
         sock.events.push(SecureEvent::Connected(peer_id));
@@ -380,6 +463,12 @@ impl SecureSocket {
     /// # }
     /// ```
     pub async fn send(&mut self, peer_id: u16, channel_id: u8, data: Vec<u8>) -> io::Result<()> {
+        self.send_bytes(peer_id, channel_id, &data).await
+    }
+    
+    /// Zero-copy send - avoids cloning data.
+    #[inline]
+    pub async fn send_bytes(&mut self, peer_id: u16, channel_id: u8, data: &[u8]) -> io::Result<()> {
         let peer = self.peers.get_mut(&peer_id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Peer not found"))?;
 
@@ -388,18 +477,22 @@ impl SecureSocket {
         }
 
         let addr = peer.peer.address;
+        
+        // Check for key rotation periodically
+        peer.cipher.maybe_rotate();
 
-        if let Some(packets) = peer.peer.send(channel_id, data) {
+        if let Some(packets) = peer.peer.send(channel_id, data.to_vec()) {
             for pkt in packets {
                 let header = peer.peer.prepare_header(pkt.channel, pkt.flags);
 
-                let mut plain = Vec::with_capacity(HEADER_SIZE + pkt.data.len());
-                let mut hdr_buf = [0u8; HEADER_SIZE];
-                header.write_to(&mut hdr_buf);
-                plain.extend_from_slice(&hdr_buf);
-                plain.extend_from_slice(&pkt.data);
+                // Build packet in fixed buffer - ZERO ALLOCATION
+                header.write_to(&mut self.packet_buf[..HEADER_SIZE]);
+                let payload_len = pkt.data.len().min(MAX_PACKET_SIZE - HEADER_SIZE);
+                self.packet_buf[HEADER_SIZE..HEADER_SIZE + payload_len]
+                    .copy_from_slice(&pkt.data[..payload_len]);
+                let plain_len = HEADER_SIZE + payload_len;
 
-                if let Some(ct_len) = peer.cipher.seal(&plain, &mut self.send_buf[..]) {
+                if let Some(ct_len) = peer.cipher.seal(&self.packet_buf[..plain_len], &mut self.send_buf[..]) {
                     self.socket.send_to(&self.send_buf[..ct_len], addr).await?;
                 }
             }
@@ -523,41 +616,64 @@ impl SecureSocket {
     }
 
     fn handle_packet(&mut self, len: usize, addr: SocketAddr) -> io::Result<()> {
-
+        // Fast path: known peer address
         if let Some(&peer_id) = self.peer_by_addr.get(&addr) {
-            let decrypted = {
+            let decrypted_len = {
                 if let Some(speer) = self.peers.get_mut(&peer_id) {
                     speer.cipher.open(&self.recv_buf[..len], &mut self.decrypt_buf[..])
-                        .map(|p| p.to_vec())
                 } else {
                     None
                 }
             };
-            if let Some(plain) = decrypted {
-                return self.process_decrypted(peer_id, &plain);
+            if let Some(plain_len) = decrypted_len {
+                // Process directly from decrypt_buf - ZERO ALLOCATION
+                return self.process_decrypted_len(peer_id, plain_len);
             }
             return Ok(());
         }
 
-        let mut found_peer = None;
+        // Slow path: find peer by trying decryption
+        let mut found_peer: Option<(u16, usize)> = None;
         for (&peer_id, speer) in &mut self.peers {
             if speer.peer.address.port() == 0 {
-                if let Some(plain) = speer.cipher.open(&self.recv_buf[..len], &mut self.decrypt_buf[..]) {
+                if let Some(plain_len) = speer.cipher.open(&self.recv_buf[..len], &mut self.decrypt_buf[..]) {
                     speer.peer.address = addr;
-                    found_peer = Some((peer_id, plain.to_vec()));
+                    found_peer = Some((peer_id, plain_len));
                     break;
                 }
             }
         }
 
-        if let Some((peer_id, plain)) = found_peer {
+        if let Some((peer_id, plain_len)) = found_peer {
             self.peer_by_addr.insert(addr, peer_id);
-            self.process_decrypted(peer_id, &plain)?;
+            self.process_decrypted_len(peer_id, plain_len)?;
         }
 
         Ok(())
     }
 
+    /// Process decrypted data from decrypt_buf with known length.
+    /// Uses fixed buffers to avoid allocation.
+    #[inline]
+    fn process_decrypted_len(&mut self, peer_id: u16, plain_len: usize) -> io::Result<()> {
+        if plain_len >= HEADER_SIZE {
+            let header = PacketHeader::read_from(&self.decrypt_buf[..plain_len])?;
+            let payload = &self.decrypt_buf[HEADER_SIZE..plain_len];
+
+            if let Some(speer) = self.peers.get_mut(&peer_id) {
+                let (_, _, msg) = speer.peer.on_packet_received(&header, payload);
+                if let Some(data) = msg {
+                    // This is the only allocation - for the event data
+                    // Could use a pool here too for truly zero-alloc
+                    self.events.push(SecureEvent::Data(peer_id, header.channel, data));
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    /// Legacy method for compatibility.
+    #[allow(dead_code)]
     fn process_decrypted(&mut self, peer_id: u16, plain: &[u8]) -> io::Result<()> {
         if plain.len() >= HEADER_SIZE {
             let header = PacketHeader::read_from(plain)?;

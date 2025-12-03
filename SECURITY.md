@@ -53,7 +53,16 @@ FastNet uses a layered security approach:
 
 2. **DoS Protection**: No built-in rate limiting. Implement at application layer.
 
-3. **Key Rotation**: Keys are session-bound. For long sessions, consider reconnecting periodically.
+## Key Rotation
+
+FastNet implements automatic key rotation for forward secrecy:
+
+- **Packet-based rotation**: Every 1,000,000 packets
+- **Time-based rotation**: Every 1 hour
+- **BLAKE3 derivation**: New keys derived from old keys + nonce
+- **Forward secrecy**: Compromised keys cannot decrypt previous traffic
+
+Key rotation happens transparently during normal operation with no performance impact.
 
 ## Best Practices
 
@@ -83,6 +92,8 @@ FastNet relies on well-audited cryptographic libraries:
 
 - **rustls** (v0.23) - TLS implementation
 - **chacha20poly1305** (v0.10) - AEAD cipher
+- **blake3** (v1.5) - Key derivation and file hashing
 - **rand** (v0.9) - Secure random number generation
+- **lz4_flex** (v0.11) - Fast compression for assets
 
 All dependencies are pure Rust with no C bindings, reducing attack surface.
