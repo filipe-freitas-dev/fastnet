@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/fastnet.svg)](https://crates.io/crates/fastnet)
 [![Documentation](https://docs.rs/fastnet/badge.svg)](https://docs.rs/fastnet)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **FastNet** is a high-performance networking library designed for real-time multiplayer games. It provides encrypted UDP communication with latencies as low as **15 microseconds** while maintaining strong security through TLS 1.3 and ChaCha20-Poly1305 encryption.
 
@@ -578,12 +578,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Licensed under the MIT license. See [LICENSE](LICENSE) for details.
 
 ---
 
