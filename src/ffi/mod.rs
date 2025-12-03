@@ -23,6 +23,7 @@ use std::slice;
 use tokio::runtime::Runtime;
 
 use crate::net::fast::{SecureSocket, SecureEvent};
+use crate::net::fast::delta::{DeltaEncoder, DeltaDecoder};
 
 /// Event types that can be received from the network.
 #[repr(C)]
@@ -490,5 +491,146 @@ pub extern "C" fn fastnet_server_peer_count(server: *mut FastNetServer) -> u32 {
         socket.peer_count() as u32
     } else {
         0
+    }
+}
+
+
+// =============================================================================
+// Delta Compression API
+// =============================================================================
+
+/// Opaque delta encoder handle.
+pub struct FastNetDeltaEncoder {
+    encoder: DeltaEncoder,
+    output_buffer: Vec<u8>,
+}
+
+/// Opaque delta decoder handle.
+pub struct FastNetDeltaDecoder {
+    decoder: DeltaDecoder,
+}
+
+/// Creates a delta encoder for compressing game state updates.
+///
+/// # Returns
+/// Handle to encoder, or NULL on error
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_encoder_create() -> *mut FastNetDeltaEncoder {
+    let encoder = Box::new(FastNetDeltaEncoder {
+        encoder: DeltaEncoder::new(),
+        output_buffer: vec![0u8; 65536], // 64KB buffer
+    });
+    Box::into_raw(encoder)
+}
+
+/// Destroys a delta encoder.
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_encoder_destroy(encoder: *mut FastNetDeltaEncoder) {
+    if !encoder.is_null() {
+        unsafe { drop(Box::from_raw(encoder)); }
+    }
+}
+
+/// Encodes delta between old and new state.
+///
+/// # Parameters
+/// - `encoder`: Encoder handle
+/// - `old_state`: Previous state data
+/// - `old_len`: Length of old state
+/// - `new_state`: New state data
+/// - `new_len`: Length of new state
+/// - `output`: Buffer to write delta to
+/// - `output_capacity`: Size of output buffer
+/// - `output_len`: Pointer to receive actual output length
+///
+/// # Returns
+/// - `0` on success
+/// - `-1` invalid parameters
+/// - `-2` output buffer too small
+/// - `-3` encoding failed
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_encode(
+    encoder: *mut FastNetDeltaEncoder,
+    old_state: *const u8,
+    old_len: u32,
+    new_state: *const u8,
+    new_len: u32,
+    output: *mut u8,
+    output_capacity: u32,
+    output_len: *mut u32,
+) -> i32 {
+    if encoder.is_null() || old_state.is_null() || new_state.is_null() 
+        || output.is_null() || output_len.is_null() {
+        return -1;
+    }
+
+    let encoder = unsafe { &mut *encoder };
+    let old_slice = unsafe { slice::from_raw_parts(old_state, old_len as usize) };
+    let new_slice = unsafe { slice::from_raw_parts(new_state, new_len as usize) };
+
+    match encoder.encoder.encode(old_slice, new_slice) {
+        Some((delta, size)) => {
+            if size > output_capacity as usize {
+                return -2;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(delta.as_ptr(), output, size);
+                *output_len = size as u32;
+            }
+            0
+        }
+        None => -3,
+    }
+}
+
+/// Creates a delta decoder for decompressing game state updates.
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_decoder_create() -> *mut FastNetDeltaDecoder {
+    let decoder = Box::new(FastNetDeltaDecoder {
+        decoder: DeltaDecoder::new(),
+    });
+    Box::into_raw(decoder)
+}
+
+/// Destroys a delta decoder.
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_decoder_destroy(decoder: *mut FastNetDeltaDecoder) {
+    if !decoder.is_null() {
+        unsafe { drop(Box::from_raw(decoder)); }
+    }
+}
+
+/// Applies delta to state buffer.
+///
+/// # Parameters
+/// - `decoder`: Decoder handle
+/// - `delta`: Delta data
+/// - `delta_len`: Length of delta
+/// - `state`: State buffer to modify in-place
+/// - `state_len`: Length of state buffer
+///
+/// # Returns
+/// - `0` on success
+/// - `-1` invalid parameters
+/// - `-3` decoding failed
+#[unsafe(no_mangle)]
+pub extern "C" fn fastnet_delta_apply(
+    decoder: *mut FastNetDeltaDecoder,
+    delta: *const u8,
+    delta_len: u32,
+    state: *mut u8,
+    state_len: u32,
+) -> i32 {
+    if decoder.is_null() || delta.is_null() || state.is_null() {
+        return -1;
+    }
+
+    let decoder = unsafe { &mut *decoder };
+    let delta_slice = unsafe { slice::from_raw_parts(delta, delta_len as usize) };
+    let state_slice = unsafe { slice::from_raw_parts_mut(state, state_len as usize) };
+
+    match decoder.decoder.apply(delta_slice, state_slice) {
+        Ok(_) => 0,
+        Err(_) => -3,
     }
 }

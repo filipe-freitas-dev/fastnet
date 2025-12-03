@@ -241,6 +241,102 @@ bool fastnet_server_poll(FastNetServer server, FastNetEvent* event);
  */
 uint32_t fastnet_server_peer_count(FastNetServer server);
 
+// =============================================================================
+// Delta Compression API (v0.2)
+// =============================================================================
+
+/// Opaque delta encoder handle
+typedef void* FastNetDeltaEncoder;
+
+/// Opaque delta decoder handle
+typedef void* FastNetDeltaDecoder;
+
+/**
+ * Creates a delta encoder for compressing game state updates.
+ * 
+ * Delta compression sends only what changed between frames,
+ * typically achieving 80-95% bandwidth reduction.
+ * 
+ * @return Encoder handle, or NULL on error
+ * 
+ * Example:
+ * ```c
+ * FastNetDeltaEncoder* encoder = fastnet_delta_encoder_create();
+ * 
+ * uint8_t old_state[512] = {...};
+ * uint8_t new_state[512] = {...};  // mostly same, few bytes changed
+ * uint8_t delta[512];
+ * uint32_t delta_len;
+ * 
+ * if (fastnet_delta_encode(encoder, old_state, 512, new_state, 512, 
+ *                          delta, sizeof(delta), &delta_len) == 0) {
+ *     // delta_len is typically much smaller than 512!
+ *     fastnet_client_send(client, 0, delta, delta_len);
+ * }
+ * ```
+ */
+FastNetDeltaEncoder fastnet_delta_encoder_create(void);
+
+/**
+ * Destroys a delta encoder.
+ * @param encoder Encoder handle (safe to pass NULL)
+ */
+void fastnet_delta_encoder_destroy(FastNetDeltaEncoder encoder);
+
+/**
+ * Encodes delta between old and new state.
+ * 
+ * @param encoder         Encoder handle
+ * @param old_state       Previous state data
+ * @param old_len         Length of old state
+ * @param new_state       New state data  
+ * @param new_len         Length of new state
+ * @param output          Buffer to write delta to
+ * @param output_capacity Size of output buffer
+ * @param output_len      Receives actual output length
+ * @return 0 on success, -1 invalid params, -2 buffer too small, -3 encode failed
+ */
+int32_t fastnet_delta_encode(
+    FastNetDeltaEncoder encoder,
+    const uint8_t* old_state,
+    uint32_t old_len,
+    const uint8_t* new_state,
+    uint32_t new_len,
+    uint8_t* output,
+    uint32_t output_capacity,
+    uint32_t* output_len
+);
+
+/**
+ * Creates a delta decoder for decompressing game state updates.
+ * @return Decoder handle, or NULL on error
+ */
+FastNetDeltaDecoder fastnet_delta_decoder_create(void);
+
+/**
+ * Destroys a delta decoder.
+ * @param decoder Decoder handle (safe to pass NULL)
+ */
+void fastnet_delta_decoder_destroy(FastNetDeltaDecoder decoder);
+
+/**
+ * Applies delta to state buffer in-place.
+ * 
+ * @param decoder   Decoder handle
+ * @param delta     Delta data received from encoder
+ * @param delta_len Length of delta
+ * @param state     State buffer to modify in-place
+ * @param state_len Length of state buffer
+ * @return 0 on success, -1 invalid params, -3 decode failed
+ */
+int32_t fastnet_delta_apply(
+    FastNetDeltaDecoder decoder,
+    const uint8_t* delta,
+    uint32_t delta_len,
+    uint8_t* state,
+    uint32_t state_len
+);
+
 #ifdef __cplusplus
 }
 #endif
