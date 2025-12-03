@@ -415,6 +415,107 @@ batch::sendmmsg(&socket, &send_batch)?;
 
 ---
 
+## How It Works
+
+### Zero-Allocation Encryption
+
+```rust
+// Traditional (slow): allocates new Vec for each packet
+let encrypted = cipher.encrypt(data); // creates new Vec
+
+// FastNet (fast): encrypts in-place, no allocation
+cipher.encrypt_in_place(&mut buffer); // reuses same buffer
+```
+
+### Delta Compression
+
+Instead of sending complete game state every frame, send only what changed:
+
+```
+Frame 1: {x: 100, y: 200, health: 100, ammo: 30, ...} → 500 bytes
+Frame 2: {x: 101, y: 200, health: 100, ammo: 30, ...} → only x changed!
+
+Without Delta: send 500 bytes
+With Delta:    send {offset: 0, value: 101} → 8 bytes (98% smaller!)
+```
+
+**Typical savings: 80-95% bandwidth reduction** for game state updates.
+
+### FEC (Forward Error Correction)
+
+Recover lost packets without waiting for retransmission:
+
+```
+Send:    [Pkt1] [Pkt2] [Pkt3] [Parity]
+Lost:    [Pkt1] [ X  ] [Pkt3] [Parity]
+Recover: Pkt2 = Pkt1 XOR Pkt3 XOR Parity ✓
+```
+
+Saves 1 RTT (~30ms) on packet loss - critical for fast-paced games.
+
+### Priority Queues
+
+When bandwidth is limited, send important packets first:
+
+```
+[CRITICAL] Player death, hit detection  → always sent
+[HIGH]     Position updates             → sent next
+[NORMAL]   Animations                   → sent if bandwidth allows
+[LOW]      Cosmetic effects             → sent when possible
+```
+
+### Jitter Buffer
+
+Smooths out network timing variations for voice/video:
+
+```
+Packets arrive: [1]...[2][3]...[4][5][6]  (variable timing)
+                 ↑       ↑
+              delays vary
+
+Jitter Buffer output: [1][2][3][4][5][6]  (constant timing)
+```
+
+### 0-RTT Reconnect
+
+Instant reconnection after network change:
+
+```
+Normal connection:  Client → "Hello" → Server → "Hello" → ready (1 RTT)
+0-RTT reconnect:    Client → "I have ticket" + data → ready instantly!
+```
+
+### Connection Migration
+
+Seamless handoff when IP changes (WiFi → 4G):
+
+```
+Player on WiFi: IP 192.168.1.50
+Switches to 4G: IP 189.45.23.100
+
+Without Migration: disconnected, loses progress
+With Migration:    client proves identity with HMAC, keeps playing
+```
+
+### Interest Management
+
+For MMOs - only send updates about nearby entities:
+
+```
+Game World:
+┌─────────────────────────────┐
+│  [A]                 [B]    │  A, B, C = far away
+│        [You]                │
+│                      [C]    │  D, E = nearby
+│  [D]   [E]                  │
+└─────────────────────────────┘
+
+Without Interest: receive updates from A,B,C,D,E (5 players)
+With Interest:    receive only D,E (nearby) → 60% less bandwidth
+```
+
+---
+
 ## Architecture
 
 ```
