@@ -11,7 +11,7 @@
 
 #![allow(dead_code)] // Internal API - some fields/methods reserved for future use
 
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 
 use super::packet::{PacketFlag, Fragmenter, FragmentAssembler};
 
@@ -62,7 +62,7 @@ pub struct Channel {
     pub channel_type: ChannelType,
 
     send_sequence: u16,
-    pending_send: VecDeque<PendingMessage>,
+    pending_send: HashMap<u16, PendingMessage>,  // O(1) ACK lookup
     fragmenter: Fragmenter,
 
     recv_sequence: u16,
@@ -80,7 +80,7 @@ impl Channel {
             id,
             channel_type,
             send_sequence: 0,
-            pending_send: VecDeque::with_capacity(256),
+            pending_send: HashMap::with_capacity(256),
             fragmenter: Fragmenter::new(),
             recv_sequence: 0,
             last_recv_sequence: None,
@@ -120,7 +120,7 @@ impl Channel {
                 });
 
                 if needs_ack {
-                    self.pending_send.push_back(PendingMessage {
+                    self.pending_send.insert(seq, PendingMessage {
                         sequence: seq,
                         data: chunk.to_vec(),
                         send_time: std::time::Instant::now(),
@@ -149,7 +149,7 @@ impl Channel {
             });
 
             if needs_ack {
-                self.pending_send.push_back(PendingMessage {
+                self.pending_send.insert(seq, PendingMessage {
                     sequence: seq,
                     data,
                     send_time: std::time::Instant::now(),
@@ -269,12 +269,13 @@ impl Channel {
         self.recv_buffer.pop_front()
     }
 
+    /// O(1) ACK - removes pending message by sequence number.
+    #[inline]
     pub fn ack(&mut self, sequence: u16) {
-        self.pending_send.retain(|msg| msg.sequence != sequence);
+        self.pending_send.remove(&sequence);
     }
 
     pub fn process_ack_bitfield(&mut self, ack: u16, bitfield: u32) {
-
         self.ack(ack);
 
         for i in 0..32 {
@@ -285,15 +286,17 @@ impl Channel {
         }
     }
 
-    pub fn get_retransmissions(&mut self, rto: std::time::Duration) -> Vec<&PendingMessage> {
+    /// Get messages that need retransmission.
+    pub fn get_retransmissions(&self, rto: std::time::Duration) -> impl Iterator<Item = &PendingMessage> {
         let now = std::time::Instant::now();
-        self.pending_send.iter()
-            .filter(|msg| msg.needs_ack && now.duration_since(msg.send_time) > rto)
-            .collect()
+        self.pending_send.values()
+            .filter(move |msg| msg.needs_ack && now.duration_since(msg.send_time) > rto)
     }
 
+    /// O(1) mark retransmitted by sequence.
+    #[inline]
     pub fn mark_retransmitted(&mut self, sequence: u16) {
-        if let Some(msg) = self.pending_send.iter_mut().find(|m| m.sequence == sequence) {
+        if let Some(msg) = self.pending_send.get_mut(&sequence) {
             msg.send_time = std::time::Instant::now();
             msg.send_count += 1;
         }

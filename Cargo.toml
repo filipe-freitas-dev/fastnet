@@ -1,6 +1,6 @@
 [package]
 name = "fastnet"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 authors = ["Filipe Freitas <filipe.freitas@filipefreitas.dev>"]
 description = "Ultra-low latency encrypted networking for real-time games. TLS 1.3 + ChaCha20-Poly1305 with ~15µs RTT."

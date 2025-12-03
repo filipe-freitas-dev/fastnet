@@ -5,6 +5,48 @@ All notable changes to FastNet will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-12-03
+
+### Performance Improvements
+- **Zero-Allocation Encryption**: `encrypt_in_place_detached` eliminates Vec allocation
+- **Zero-Allocation Decryption**: `decrypt_in_place_detached` eliminates Vec allocation
+- **O(1) ACK Lookups**: Channel pending messages use HashMap instead of VecDeque
+- **Zero-Alloc Iterator**: `get_retransmissions()` returns iterator instead of Vec
+
+### Added
+- **Forward Error Correction** (`fec` module)
+  - XOR parity for single packet recovery per group
+  - Configurable group size (default 4 packets)
+  - `FecEncoder`/`FecDecoder` with zero-alloc design
+- **Delta Compression** (`delta` module)
+  - Send only changed bytes between states
+  - 80-95% bandwidth reduction for game state
+  - Run-length encoding of differences
+- **Priority Queues** (`priority` module)
+  - 4 priority levels: Critical, High, Normal, Low
+  - Critical packets bypass capacity limits
+  - `WeightedQueue` for fair bandwidth allocation
+- **Jitter Buffer** (`jitter` module)
+  - Adaptive delay based on measured jitter
+  - Packet reordering and concealment
+  - RFC 3550 jitter calculation
+- **Connection Metrics** (`metrics` module)
+  - Real-time RTT, jitter, loss percentage
+  - Throughput monitoring (bytes/sec)
+  - Sliding window statistics
+- **0-RTT Session Resumption** (`reconnect` module)
+  - Encrypted session tickets with BLAKE3 HMAC
+  - Replay protection via ticket ID tracking
+  - Configurable ticket lifetime
+- **Connection Migration** (`migration` module)
+  - Seamless IP/network changes without disconnect
+  - HMAC-based migration proof
+  - Rate limiting for DoS protection
+- **Interest Management** (`interest` module)
+  - Spatial hash grid for O(1) entity queries
+  - Player visibility tracking with enter/leave events
+  - Priority calculation based on distance
+
 ## [0.1.9] - 2025-12-03
 
 ### Added

@@ -28,7 +28,7 @@ use tokio_rustls::server::TlsStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_rustls::rustls::{self, pki_types::{CertificateDer, PrivateKeyDer}};
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use chacha20poly1305::aead::generic_array::GenericArray;
 
 use super::packet::{PacketHeader, HEADER_SIZE, MAX_PACKET_SIZE};
@@ -158,38 +158,72 @@ impl Cipher {
     /// Returns encrypted length or None on failure.
     #[inline]
     fn seal(&mut self, plaintext: &[u8], output: &mut [u8]) -> Option<usize> {
+        use chacha20poly1305::aead::AeadInPlace;
+        
         self.packets_since_rotation += 1;
         
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&self.nonce_send.to_le_bytes());
         self.nonce_send = self.nonce_send.wrapping_add(1);
 
-        // Use in-place encryption to avoid allocation
-        if let Ok(ct) = self.encrypt.encrypt(GenericArray::from_slice(&nonce), plaintext) {
-            if output.len() >= 8 + ct.len() {
-                output[..8].copy_from_slice(&nonce[4..12]);
-                output[8..8 + ct.len()].copy_from_slice(&ct);
-                return Some(8 + ct.len());
-            }
+        // Zero-allocation: encrypt in-place with detached tag
+        let ct_len = plaintext.len();
+        let tag_offset = 8 + ct_len;
+        
+        if output.len() < tag_offset + 16 {
+            return None;
         }
-        None
+        
+        // Copy nonce and plaintext to output
+        output[..8].copy_from_slice(&nonce[4..12]);
+        output[8..tag_offset].copy_from_slice(plaintext);
+        
+        // Encrypt in-place
+        match self.encrypt.encrypt_in_place_detached(
+            GenericArray::from_slice(&nonce),
+            &[],  // no AAD
+            &mut output[8..tag_offset],
+        ) {
+            Ok(tag) => {
+                output[tag_offset..tag_offset + 16].copy_from_slice(&tag);
+                Some(tag_offset + 16)
+            }
+            Err(_) => None,
+        }
     }
 
     /// Decrypt and return length of plaintext.
-    /// Zero-copy: writes directly to output buffer.
+    /// Zero-allocation: decrypts in-place.
     #[inline]
     fn open<'a>(&self, ciphertext: &[u8], output: &'a mut [u8]) -> Option<usize> {
+        use chacha20poly1305::aead::AeadInPlace;
+        
+        // Minimum: 8 (nonce) + 16 (tag) = 24 bytes
         if ciphertext.len() < 24 { return None; }
+        
         let mut nonce = [0u8; 12];
         nonce[4..12].copy_from_slice(&ciphertext[..8]);
-
-        if let Ok(pt) = self.decrypt.decrypt(GenericArray::from_slice(&nonce), &ciphertext[8..]) {
-            if output.len() >= pt.len() {
-                output[..pt.len()].copy_from_slice(&pt);
-                return Some(pt.len());
-            }
+        
+        let ct_len = ciphertext.len() - 8 - 16; // minus nonce and tag
+        if output.len() < ct_len { return None; }
+        
+        // Copy ciphertext to output for in-place decryption
+        output[..ct_len].copy_from_slice(&ciphertext[8..8 + ct_len]);
+        
+        // Extract tag
+        let mut tag = [0u8; 16];
+        tag.copy_from_slice(&ciphertext[ciphertext.len() - 16..]);
+        
+        // Decrypt in-place
+        match self.decrypt.decrypt_in_place_detached(
+            GenericArray::from_slice(&nonce),
+            &[],  // no AAD
+            &mut output[..ct_len],
+            GenericArray::from_slice(&tag),
+        ) {
+            Ok(()) => Some(ct_len),
+            Err(_) => None,
         }
-        None
     }
 }
 
