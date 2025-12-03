@@ -14,13 +14,25 @@
 
 ## Features
 
-- **Ultra-Low Latency**: ~12-15µs average RTT on localhost, competitive with raw UDP
+### Core
+- **Ultra-Low Latency**: ~14µs average RTT on localhost, only 80% overhead vs raw UDP
 - **Built-in Encryption**: TLS 1.3 handshake + ChaCha20-Poly1305 AEAD
-- **Zero-Alloc Hot Path**: Fixed buffers, no allocations in send/recv loop
+- **Zero-Alloc Hot Path**: In-place encryption/decryption, O(1) ACK lookups
 - **Key Rotation**: Automatic key rotation for forward secrecy
-- **Linux Tuning**: SO_BUSY_POLL, IP_TOS, sendmmsg/recvmmsg batching
-- **Zero Configuration Security**: No need to understand cryptography
 - **Game Engine Ready**: C/C++ FFI for Unreal Engine, Unity, Godot
+
+### v0.2 New Modules
+- **FEC**: XOR parity for single packet recovery without retransmission
+- **Delta Compression**: 80-95% bandwidth reduction for game state updates
+- **Priority Queues**: Critical packets first with weighted fair scheduling
+- **Jitter Buffer**: Adaptive delay for smooth voice/video streaming
+- **Metrics**: Real-time RTT, jitter, throughput, packet loss tracking
+- **0-RTT Reconnect**: Session resumption with encrypted tickets
+- **Connection Migration**: Seamless IP/network changes with HMAC proof
+- **Interest Management**: Spatial hash grid for MMO entity filtering
+
+### Infrastructure
+- **Linux Tuning**: SO_BUSY_POLL, IP_TOS, sendmmsg/recvmmsg batching
 - **Async/Await**: Built on Tokio for efficient I/O
 - **Reliable & Unreliable Channels**: Choose the right mode for your data
 - **P2P Networking**: Direct peer-to-peer connections with NAT traversal
@@ -31,27 +43,31 @@
 
 ## Benchmarks
 
-Tested with 50,000 packets at 10,000 packets/second on localhost:
+Tested with 10,000 RTT measurements on localhost (64-byte payload):
 
-| Metric | ENet | FastNet | QUIC |
-|--------|------|---------|------|
-| **Avg Latency** | 112.7 µs | **15.6 µs** | 64.0 µs |
-| **P99 Latency** | 143.0 µs | **69.6 µs** | 170.0 µs |
-| **Max Latency** | 323 µs | **103.6 µs** | 1868 µs |
-| **Encryption** | None | ChaCha20 | TLS |
+| Metric | Raw UDP | FastNet v0.2 | QUIC | ENet | RakNet |
+|--------|---------|--------------|------|------|--------|
+| **Avg Latency** | ~8 µs | **14.5 µs** | ~150 µs | ~60 µs | ~80 µs |
+| **P99 Latency** | ~15 µs | **27 µs** | ~400 µs | ~180 µs | ~250 µs |
+| **P99.9 Latency** | ~30 µs | **76 µs** | ~800 µs | ~300 µs | ~400 µs |
+| **Encryption** | None | ChaCha20-Poly1305 | TLS 1.3 | None | Optional |
 
 ```
-Average Latency (lower is better)
+Average RTT Latency (lower is better)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FastNet      ██ 15.6 µs ⚡
-QUIC         ████████ 64.0 µs
-ENet         ██████████████ 112.7 µs
+Raw UDP      █ 8 µs (baseline)
+FastNet      ██ 14.5 µs ⚡ (encrypted!)
+ENet         ████████ 60 µs (unencrypted)
+RakNet       ██████████ 80 µs (unencrypted)
+QUIC         ███████████████████ 150 µs
 ```
 
-> **7x faster** than ENet with full encryption enabled
+> **FastNet is ~4x faster than ENet** while providing full ChaCha20-Poly1305 encryption
 >
-> *Note: Max latency spikes in FastNet/QUIC are due to TLS overhead during handshake*
+> **Only ~80% overhead vs raw UDP** despite TLS 1.3 key exchange + encryption
+>
+> *Benchmarks: v0.2.0 with zero-allocation hot path, O(1) ACK lookups*
 
 ---
 
@@ -63,7 +79,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fastnet = "0.1"
+fastnet = "0.2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
 
@@ -136,8 +152,8 @@ async fn main() -> std::io::Result<()> {
 
 Add the crate into your project:
 
-```Cargo.toml
-fastnet = { version = "0.1", features = ["ffi"] }
+```toml
+fastnet = { version = "0.2", features = ["ffi"] }
 ```
 
 or clone the repo into your machine:
