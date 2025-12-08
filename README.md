@@ -15,7 +15,7 @@
 ## Features
 
 ### Core
-- **Ultra-Low Latency**: ~14µs average RTT on localhost, only 80% overhead vs raw UDP
+- **Ultra-Low Latency**: ~14µs median RTT on localhost, 2.5x faster than QUIC
 - **Built-in Encryption**: TLS 1.3 handshake + ChaCha20-Poly1305 AEAD
 - **Zero-Alloc Hot Path**: In-place encryption/decryption, O(1) ACK lookups
 - **Key Rotation**: Automatic key rotation for forward secrecy
@@ -46,29 +46,31 @@
 
 Tested with 10,000 RTT measurements on localhost (64-byte payload):
 
-| Metric | Raw UDP | FastNet v0.2 | QUIC | ENet | RakNet |
-|--------|---------|--------------|------|------|--------|
-| **Avg Latency** | ~8 µs | **14.5 µs** | ~150 µs | ~60 µs | ~80 µs |
-| **P99 Latency** | ~15 µs | **27 µs** | ~400 µs | ~180 µs | ~250 µs |
-| **P99.9 Latency** | ~30 µs | **76 µs** | ~800 µs | ~300 µs | ~400 µs |
-| **Encryption** | None | ChaCha20-Poly1305 | TLS 1.3 | None | Optional |
+| Metric | Raw UDP | ENet | FastNet v0.2.6 | RakNet | QUIC |
+|--------|---------|------|----------------|--------|------|
+| **Median Latency** | 8.8 µs | 9.6 µs | **13.7 µs** | 29 µs | 37 µs |
+| **P99 Latency** | 18.7 µs | 19.9 µs | **19.2 µs** | 126 µs | 106 µs |
+| **P99.9 Latency** | 102 µs | 91 µs | **75 µs** | 10,223 µs | 190 µs |
+| **Encryption** | ❌ None | ❌ None | ✅ ChaCha20 | ❌ None | ✅ TLS 1.3 |
 
 ```
-Average RTT Latency (lower is better)
+Median RTT Latency (lower is better)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Raw UDP      █ 8 µs (baseline)
-FastNet      ██ 14.5 µs ⚡ (encrypted!)
-ENet         ████████ 60 µs (unencrypted)
-RakNet       ██████████ 80 µs (unencrypted)
-QUIC         ███████████████████ 150 µs
+Raw UDP      █ 9 µs (baseline)
+ENet         █ 10 µs (no encryption)
+FastNet      ██ 14 µs ⚡ (ENCRYPTED!)
+RakNet       ████ 29 µs (no encryption)
+QUIC         █████ 37 µs (encrypted)
 ```
 
-> **FastNet is ~4x faster than ENet** while providing full ChaCha20-Poly1305 encryption
+> **FastNet is the fastest encrypted protocol** - 2.7x faster than QUIC
 >
-> **Only ~80% overhead vs raw UDP** despite TLS 1.3 key exchange + encryption
+> **2x faster than RakNet** even WITH encryption vs RakNet without
 >
-> *Benchmarks: v0.2.0 with zero-allocation hot path, O(1) ACK lookups*
+> **Only 43% slower than ENet** while providing full ChaCha20-Poly1305 encryption
+>
+> *All benchmarks measured on same machine, 10k iterations, 64-byte payload*
 
 ---
 
