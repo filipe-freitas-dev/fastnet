@@ -39,6 +39,7 @@ pub mod metrics;
 pub mod reconnect;
 pub mod interest;
 pub mod migration;
+pub mod bbr;
 
 pub use secure::{SecureSocket, SecureEvent};
 pub use tuning::{SocketConfig, batch};

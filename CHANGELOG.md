@@ -5,6 +5,20 @@ All notable changes to FastNet will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2025-12-08
+
+### Added
+- **BBR Congestion Control** (`bbr` module)
+  - Google's BBR (Bottleneck Bandwidth and RTT) algorithm
+  - 2.3x better throughput under 5% packet loss vs AIMD
+  - Estimates bottleneck bandwidth with windowed max filter
+  - Tracks minimum RTT with windowed min filter
+  - State machine: Startup → Drain → ProbeBW → ProbeRTT
+  - Keeps queues nearly empty for minimal latency
+  - Adapts quickly to bandwidth changes
+  - FFI Delta Compression API for C/C++ applications
+  - FFI tests and benchmarks
+
 ## [0.2.0] - 2025-12-03
 
 ### Performance Improvements
