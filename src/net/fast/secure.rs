@@ -602,6 +602,10 @@ impl SecureSocket {
                             }
                         }
                     }
+
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        // Wake up periodically to check timeouts even if no packets arrive
+                    }
                 }
             } else {
 
@@ -612,7 +616,9 @@ impl SecureSocket {
                             self.handle_packet(len, addr)?;
                         }
                     }
-                    _ = tokio::task::yield_now() => {}
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        // Wake up periodically to check timeouts even if no packets arrive
+                    }
                 }
             }
         }
@@ -695,6 +701,15 @@ impl SecureSocket {
     fn process_decrypted_len(&mut self, peer_id: u16, plain_len: usize) -> io::Result<()> {
         if plain_len >= HEADER_SIZE {
             let header = PacketHeader::read_from(&self.decrypt_buf[..plain_len])?;
+
+            // Check for disconnect packet
+            if header.is_disconnect() {
+                self.peers.remove(&peer_id);
+                self.peer_by_addr.retain(|_, &mut id| id != peer_id);
+                self.events.push(SecureEvent::Disconnected(peer_id));
+                return Ok(());
+            }
+
             let payload = &self.decrypt_buf[HEADER_SIZE..plain_len];
 
             if let Some(speer) = self.peers.get_mut(&peer_id) {
@@ -763,14 +778,28 @@ impl SecureSocket {
     /// socket.disconnect(peer_id).unwrap();
     /// # }
     /// ```
-    pub fn disconnect(&mut self, peer_id: u16) -> io::Result<()> {
-        if self.peers.remove(&peer_id).is_some() {
-            self.peer_by_addr.retain(|_, &mut id| id != peer_id);
-            self.events.push(SecureEvent::Disconnected(peer_id));
-            Ok(())
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "Peer not found"))
+    pub async fn disconnect(&mut self, peer_id: u16) -> io::Result<()> {
+        use super::packet::PacketFlag;
+
+        let peer = self.peers.get_mut(&peer_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Peer not found"))?;
+
+        let addr = peer.peer.address;
+
+        // Send disconnect packet to notify the other end
+        let header = peer.peer.prepare_header(0, PacketFlag::Disconnect as u8);
+        header.write_to(&mut self.packet_buf[..HEADER_SIZE]);
+
+        if let Some(ct_len) = peer.cipher.seal(&self.packet_buf[..HEADER_SIZE], &mut self.send_buf[..]) {
+            self.socket.send_to(&self.send_buf[..ct_len], addr).await?;
         }
+
+        // Remove peer locally
+        self.peers.remove(&peer_id);
+        self.peer_by_addr.retain(|_, &mut id| id != peer_id);
+        self.events.push(SecureEvent::Disconnected(peer_id));
+
+        Ok(())
     }
 
     /// Checks for timed out peers and generates Disconnected events.

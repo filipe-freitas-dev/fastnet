@@ -43,15 +43,14 @@ async fn main() -> std::io::Result<()> {
         println!();
 
         // Wait for Connected event and get peer_id
-        let peer_id = loop {
+        let peer_id = 'wait_connect: loop {
             for event in client.poll().await? {
                 if let SecureEvent::Connected(id) = event {
                     println!("[+] Connected as peer {}", id);
-                    break id;
+                    break 'wait_connect id;
                 }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
-            continue;
         };
 
         // Send some test messages
@@ -93,7 +92,7 @@ async fn main() -> std::io::Result<()> {
 
         // Gracefully disconnect
         println!("Disconnecting...");
-        client.disconnect(peer_id)?;
+        client.disconnect(peer_id).await?;
 
         // Wait a moment for the server to process the disconnect
         tokio::time::sleep(Duration::from_millis(100)).await;
