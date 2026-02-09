@@ -579,6 +579,9 @@ impl SecureSocket {
             }
         }
 
+        // Check for timed out peers
+        self.check_timeouts();
+
         if self.events.is_empty() {
             if let (Some(listener), Some(acceptor)) = (&self.tls_listener, &self.tls_acceptor) {
                 let acceptor = acceptor.clone();
@@ -736,6 +739,55 @@ impl SecureSocket {
     /// - `None` if the peer doesn't exist
     pub fn peer_rtt(&self, peer_id: u16) -> Option<Duration> {
         self.peers.get(&peer_id).map(|p| p.peer.rtt())
+    }
+
+    /// Disconnects a peer.
+    ///
+    /// This removes the peer from the peer list and generates a `Disconnected` event.
+    /// Use this for graceful disconnection.
+    ///
+    /// # Parameters
+    ///
+    /// - `peer_id`: The peer ID to disconnect
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` if the peer was disconnected
+    /// - `Err` if the peer doesn't exist
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fastnet::SecureSocket;
+    /// # async fn example(socket: &mut SecureSocket, peer_id: u16) {
+    /// socket.disconnect(peer_id).unwrap();
+    /// # }
+    /// ```
+    pub fn disconnect(&mut self, peer_id: u16) -> io::Result<()> {
+        if self.peers.remove(&peer_id).is_some() {
+            self.peer_by_addr.retain(|_, &mut id| id != peer_id);
+            self.events.push(SecureEvent::Disconnected(peer_id));
+            Ok(())
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Peer not found"))
+        }
+    }
+
+    /// Checks for timed out peers and generates Disconnected events.
+    fn check_timeouts(&mut self) {
+        let mut disconnected = Vec::new();
+
+        for (&peer_id, speer) in &self.peers {
+            if speer.peer.is_timed_out() {
+                disconnected.push(peer_id);
+            }
+        }
+
+        for peer_id in disconnected {
+            self.peers.remove(&peer_id);
+            self.peer_by_addr.retain(|_, &mut id| id != peer_id);
+            self.events.push(SecureEvent::Disconnected(peer_id));
+        }
     }
 }
 

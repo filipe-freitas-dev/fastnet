@@ -91,6 +91,15 @@ async fn main() -> std::io::Result<()> {
         println!("All messages echoed successfully!");
         println!();
 
+        // Gracefully disconnect
+        println!("Disconnecting...");
+        client.disconnect(peer_id)?;
+
+        // Wait a moment for the server to process the disconnect
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        println!("Disconnected gracefully.");
+
         Ok(())
     }
 }

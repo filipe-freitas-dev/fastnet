@@ -5,6 +5,22 @@ All notable changes to FastNet will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-02-09
+
+### Added
+- **Automatic Disconnect Detection**: Server now detects client disconnections via timeout
+  - `SecureSocket::poll()` now checks for timed-out peers (30s default)
+  - Generates `SecureEvent::Disconnected` events automatically
+- **Graceful Disconnect Method**: New `SecureSocket::disconnect()` method
+  - Allows clients to disconnect gracefully
+  - Properly cleans up peer state and generates disconnect events
+
+### Fixed
+- **Server Not Receiving Disconnect Events**: Fixed issue where server would never detect when clients disconnected
+  - Added `check_timeouts()` method to periodically verify peer connectivity
+  - Peers that haven't sent data for more than the timeout period are now properly removed
+- **Echo Client Example**: Updated to demonstrate graceful disconnection
+
 ## [0.2.5] - 2025-12-08
 
 ### Added
