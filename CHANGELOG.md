@@ -5,6 +5,23 @@ All notable changes to FastNet will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-02-09
+
+### Fixed
+- **Disconnect Packet Implementation**: `disconnect()` now sends a Disconnect packet to notify remote peer
+  - Previously only cleaned up local state without notifying the other side
+  - Remote peer now receives `Disconnected` event immediately
+- **Periodic Timeout Checks**: Server now wakes up every 1 second to check for timed-out peers
+  - Previously only checked timeouts when packets arrived
+  - Clients that crash or become unresponsive are now detected within 30 seconds
+- **Tested All Disconnect Scenarios**:
+  - ✅ Graceful disconnect (client calls `disconnect()`) - instant detection
+  - ✅ Client crash/freeze - detected via 30s timeout
+  - ✅ Network loss - detected via 30s timeout
+
+### Changed
+- `SecureSocket::disconnect()` is now `async` (breaking change for manual disconnect calls)
+
 ## [0.2.7] - 2026-02-09
 
 ### Added
