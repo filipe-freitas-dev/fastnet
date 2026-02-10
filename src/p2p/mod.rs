@@ -206,8 +206,8 @@ pub struct P2PConfig {
     pub punch_timeout: Duration,
     /// Interval between punch packets.
     pub punch_interval: Duration,
-    /// Peer timeout (no packets received).
-    pub peer_timeout: Duration,
+    /// Peer timeout (no packets received). None means no timeout.
+    pub peer_timeout: Option<Duration>,
     /// Enable relay fallback when direct connection fails.
     pub enable_relay: bool,
 }
@@ -218,7 +218,7 @@ impl Default for P2PConfig {
             max_punch_attempts: 10,
             punch_timeout: Duration::from_secs(5),
             punch_interval: Duration::from_millis(100),
-            peer_timeout: Duration::from_secs(30),
+            peer_timeout: None,
             enable_relay: true,
         }
     }
@@ -528,17 +528,18 @@ impl P2PSocket {
     }
     
     fn check_timeouts(&mut self) {
-        let now = Instant::now();
-        let timeout = self.config.peer_timeout;
-        
-        let timed_out: Vec<_> = self.peers.iter()
-            .filter(|(_, p)| now.duration_since(p.last_seen) > timeout)
-            .map(|(&id, _)| id)
-            .collect();
-        
-        for peer_id in timed_out {
-            self.peers.remove(&peer_id);
-            self.events.push(P2PEvent::PeerLeft(peer_id));
+        if let Some(timeout) = self.config.peer_timeout {
+            let now = Instant::now();
+
+            let timed_out: Vec<_> = self.peers.iter()
+                .filter(|(_, p)| now.duration_since(p.last_seen) > timeout)
+                .map(|(&id, _)| id)
+                .collect();
+
+            for peer_id in timed_out {
+                self.peers.remove(&peer_id);
+                self.events.push(P2PEvent::PeerLeft(peer_id));
+            }
         }
     }
 }

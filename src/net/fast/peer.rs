@@ -39,8 +39,8 @@ pub struct PeerConfig {
     pub rto_max: Duration,
     /// Interval between keepalive pings
     pub ping_interval: Duration,
-    /// Connection timeout (no response)
-    pub timeout: Duration,
+    /// Connection timeout (no response). None means no timeout.
+    pub timeout: Option<Duration>,
 }
 
 impl Default for PeerConfig {
@@ -55,7 +55,7 @@ impl Default for PeerConfig {
             rto_min: Duration::from_millis(100),
             rto_max: Duration::from_secs(5),
             ping_interval: Duration::from_secs(1),
-            timeout: Duration::from_secs(30),
+            timeout: None,
         }
     }
 }
@@ -352,7 +352,9 @@ impl Peer {
     }
 
     pub fn is_timed_out(&self) -> bool {
-        self.last_recv.elapsed() > self.config.timeout
+        self.config.timeout
+            .map(|timeout| self.last_recv.elapsed() > timeout)
+            .unwrap_or(false)
     }
 
     #[inline]

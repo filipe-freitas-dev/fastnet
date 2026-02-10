@@ -48,7 +48,8 @@ async fn main() -> std::io::Result<()> {
 
     println!();
     println!("✋ Now client will wait forever without disconnect (simulating freeze)");
-    println!("   Server should detect timeout after 30 seconds...");
+    println!("   Note: Automatic timeout detection is disabled by default.");
+    println!("   To enable timeout detection, configure PeerConfig with a timeout value.");
     println!();
 
     // Wait forever without calling disconnect() - simulating a crash/freeze
