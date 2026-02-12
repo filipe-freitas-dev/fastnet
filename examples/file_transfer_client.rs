@@ -56,13 +56,13 @@ async fn main() -> std::io::Result<()> {
             buf
         }
 
-        fn wait_response(text: &str) -> String {
-            match text.first().copied() {
-                Some(b) if b == RESP_OK => format!("[OK] {}", String::from_utf8_lossy(&text.as_bytes()[1..])),
-                Some(b) if b == RESP_ERROR => format!("[ERROR] {}", String::from_utf8_lossy(&text.as_bytes()[1..])),
-                Some(b) if b == RESP_FILE_LIST => format!("[FILES]\n{}", String::from_utf8_lossy(&text.as_bytes()[1..])),
-                Some(b) if b == RESP_FILE_DATA => {
-                    let data = text.as_bytes();
+        fn format_response(data: &[u8]) -> String {
+            if data.is_empty() { return "[?] empty".to_string(); }
+            match data[0] {
+                RESP_OK => format!("[OK] {}", String::from_utf8_lossy(&data[1..])),
+                RESP_ERROR => format!("[ERROR] {}", String::from_utf8_lossy(&data[1..])),
+                RESP_FILE_LIST => format!("[FILES]\n{}", String::from_utf8_lossy(&data[1..])),
+                RESP_FILE_DATA => {
                     if data.len() >= 4 {
                         let name_len = u16::from_le_bytes([data[1], data[2]]) as usize;
                         if data.len() >= 3 + name_len + 8 {
@@ -75,7 +75,7 @@ async fn main() -> std::io::Result<()> {
                     }
                     "[FILE] Received".to_string()
                 }
-                _ => format!("[?] {}", text),
+                _ => format!("[?] {} bytes", data.len()),
             }
         }
 
@@ -117,8 +117,7 @@ async fn main() -> std::io::Result<()> {
             tokio::time::sleep(Duration::from_millis(50)).await;
             for event in client.poll().await? {
                 if let SecureEvent::Data(_, _, resp) = event {
-                    let text = String::from_utf8_lossy(&resp);
-                    println!("  Server: {}", wait_response(&text));
+                    println!("  Server: {}", format_response(&resp));
                 }
             }
         }

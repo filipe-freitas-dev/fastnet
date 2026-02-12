@@ -27,7 +27,6 @@ async fn main() -> std::io::Result<()> {
     {
         use std::time::Duration;
         use fastnet::{SecureSocket, SecureEvent};
-        use tokio::io::{self, AsyncBufReadExt, BufReader};
 
         println!("╔═══════════════════════════════════════╗");
         println!("║     FastNet Remote Command Client     ║");
@@ -64,13 +63,20 @@ async fn main() -> std::io::Result<()> {
         println!("  /quit            Disconnect");
         println!();
 
-        let stdin = BufReader::new(io::stdin());
-        let mut lines = stdin.lines();
+        // Spawn a blocking thread for stdin reading
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+        tokio::task::spawn_blocking(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(l) => { if tx.blocking_send(l).is_err() { break; } }
+                    Err(_) => break,
+                }
+            }
+        });
 
         loop {
-            print!("$ ");
-            // Note: print! without newline may not flush in all terminals
-
             tokio::select! {
                 biased;
 
@@ -100,9 +106,9 @@ async fn main() -> std::io::Result<()> {
                     }
                 }
 
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(input)) => {
+                input = rx.recv() => {
+                    match input {
+                        Some(input) => {
                             let input = input.trim().to_string();
                             if input.is_empty() { continue; }
 
@@ -120,24 +126,27 @@ async fn main() -> std::io::Result<()> {
                             let mut got_response = false;
                             while start.elapsed() < timeout {
                                 for event in client.poll().await? {
-                                    if let SecureEvent::Data(_, _, data) = event {
-                                        let text = String::from_utf8_lossy(&data);
-                                        if let Some(out) = text.strip_prefix("OUT:") {
-                                            println!("{}", out);
-                                        } else if let Some(err) = text.strip_prefix("ERR:") {
-                                            eprintln!("[ERROR] {}", err);
-                                        } else if text == "PONG" {
-                                            println!("  PONG! ({:?})", start.elapsed());
-                                        } else if let Some(ok) = text.strip_prefix("OK:") {
-                                            println!("  [OK] {}", ok);
-                                        } else {
-                                            println!("  {}", text);
+                                    match event {
+                                        SecureEvent::Data(_, _, data) => {
+                                            let text = String::from_utf8_lossy(&data);
+                                            if let Some(out) = text.strip_prefix("OUT:") {
+                                                println!("{}", out);
+                                            } else if let Some(err) = text.strip_prefix("ERR:") {
+                                                eprintln!("[ERROR] {}", err);
+                                            } else if text == "PONG" {
+                                                println!("  PONG! ({:?})", start.elapsed());
+                                            } else if let Some(ok) = text.strip_prefix("OK:") {
+                                                println!("  [OK] {}", ok);
+                                            } else {
+                                                println!("  {}", text);
+                                            }
+                                            got_response = true;
                                         }
-                                        got_response = true;
-                                    }
-                                    if let SecureEvent::Disconnected(_) = event {
-                                        println!("\nServer disconnected.");
-                                        return Ok(());
+                                        SecureEvent::Disconnected(_) => {
+                                            println!("\nServer disconnected.");
+                                            return Ok(());
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 if got_response { break; }
@@ -147,11 +156,10 @@ async fn main() -> std::io::Result<()> {
                                 eprintln!("  [TIMEOUT] No response after {:?}", timeout);
                             }
                         }
-                        Ok(None) => {
+                        None => {
                             client.disconnect(peer_id).await?;
                             return Ok(());
                         }
-                        Err(e) => return Err(e),
                     }
                 }
             }

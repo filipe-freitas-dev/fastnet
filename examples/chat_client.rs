@@ -28,7 +28,6 @@ async fn main() -> std::io::Result<()> {
     {
         use std::time::Duration;
         use fastnet::{SecureSocket, SecureEvent};
-        use tokio::io::{self, AsyncBufReadExt, BufReader};
 
         println!("╔═══════════════════════════════════════╗");
         println!("║       FastNet Chat Client             ║");
@@ -54,20 +53,29 @@ async fn main() -> std::io::Result<()> {
         println!("Commands: /nick <name>, /list, /quit");
         println!("Type a message and press Enter to send.\n");
 
-        let stdin = BufReader::new(io::stdin());
-        let mut lines = stdin.lines();
+        // Spawn a blocking thread for stdin reading
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+        tokio::task::spawn_blocking(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(l) => { if tx.blocking_send(l).is_err() { break; } }
+                    Err(_) => break,
+                }
+            }
+        });
 
         loop {
             tokio::select! {
                 biased;
 
-                // Check for incoming messages (non-blocking, with short timeout)
+                // Check for incoming messages
                 result = client.poll() => {
                     for event in result? {
                         match event {
                             SecureEvent::Data(_, _, data) => {
                                 let text = String::from_utf8_lossy(&data);
-                                // Parse protocol: MSG:sender:text or SYS:text
                                 if let Some(msg) = text.strip_prefix("MSG:") {
                                     if let Some((sender, content)) = msg.split_once(':') {
                                         println!("  [{}] {}", sender, content);
@@ -87,10 +95,10 @@ async fn main() -> std::io::Result<()> {
                     }
                 }
 
-                // Read user input
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(input)) => {
+                // Read user input from channel
+                input = rx.recv() => {
+                    match input {
+                        Some(input) => {
                             let input = input.trim().to_string();
                             if input.is_empty() { continue; }
 
@@ -104,14 +112,9 @@ async fn main() -> std::io::Result<()> {
 
                             client.send(peer_id, 0, input.into_bytes()).await?;
                         }
-                        Ok(None) => {
-                            // EOF
+                        None => {
                             client.disconnect(peer_id).await?;
                             return Ok(());
-                        }
-                        Err(e) => {
-                            eprintln!("Input error: {}", e);
-                            return Err(e);
                         }
                     }
                 }
