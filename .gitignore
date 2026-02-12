@@ -3,4 +3,4 @@
 *.pem
 .env*
 benchmarks/*
-#guia-fastnet.md
+/docs
