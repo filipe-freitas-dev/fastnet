@@ -55,7 +55,7 @@ impl Default for PeerConfig {
             rto_min: Duration::from_millis(100),
             rto_max: Duration::from_secs(5),
             ping_interval: Duration::from_secs(1),
-            timeout: None,
+            timeout: Some(Duration::from_secs(10)),
         }
     }
 }
