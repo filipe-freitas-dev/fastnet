@@ -4,3 +4,4 @@
 .env*
 benchmarks/*
 /docs
+AGENTS.md
