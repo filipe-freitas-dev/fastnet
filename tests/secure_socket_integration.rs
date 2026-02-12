@@ -567,7 +567,284 @@ mod tests {
         println!("[OK] Server crash detection test passed\n");
     }
 
-    // ==================== TEST 10: Disconnect twice (should fail gracefully) ====================
+    // ==================== TEST 10: Remote CMD — Server sends command, Client executes ====================
+
+    /// Helper: wait for a Data event matching a predicate, with timeout.
+    async fn wait_for_data<F>(
+        socket: &mut SecureSocket,
+        predicate: F,
+        timeout: Duration,
+    ) -> Option<(u16, u8, Vec<u8>)>
+    where
+        F: Fn(&str) -> bool,
+    {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            let events = socket.poll().await.unwrap();
+            for event in events {
+                if let SecureEvent::Data(peer_id, channel, data) = event {
+                    let text = String::from_utf8_lossy(&data);
+                    if predicate(&text) {
+                        return Some((peer_id, channel, data));
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_remote_cmd_server_sends_command() {
+        println!("\n=== TEST: Remote CMD — Server sends CMD, Client executes ===");
+
+        let (mut server, mut client, server_peer_id, client_peer_id) =
+            setup_connected_pair().await;
+
+        // Client sends initial data so server resolves UDP address
+        client.send(client_peer_id, 0, b"ready".to_vec()).await.unwrap();
+        let _ = wait_for_data(&mut server, |_| true, Duration::from_secs(2)).await;
+
+        // Server sends a command to the client
+        let cmd = b"CMD:echo hello_fastnet".to_vec();
+        server.send(server_peer_id, 0, cmd).await
+            .expect("Server should send CMD");
+        println!("[server] Sent: CMD:echo hello_fastnet");
+
+        // Client receives the command
+        let result = wait_for_data(&mut client, |t| t.starts_with("CMD:"), Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Client should receive CMD from server");
+        let (_, _, data) = result.unwrap();
+        let request = String::from_utf8_lossy(&data);
+        println!("[client] Received: {}", request);
+
+        // Client executes the command
+        let cmd_str = request.strip_prefix("CMD:").unwrap().trim();
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd_str)
+            .output()
+            .expect("Failed to execute command");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let response = format!("OUT:{}", stdout.trim_end());
+        println!("[client] Executed, sending: {}", response);
+
+        client.send(client_peer_id, 0, response.into_bytes()).await
+            .expect("Client should send response");
+
+        // Server receives the output
+        let result = wait_for_data(&mut server, |t| t.starts_with("OUT:"), Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Server should receive OUT from client");
+        let (_, _, data) = result.unwrap();
+        let text = String::from_utf8_lossy(&data);
+        println!("[server] Received: {}", text);
+        assert!(text.contains("hello_fastnet"), "Output should contain 'hello_fastnet'");
+
+        println!("[OK] Remote CMD test passed\n");
+    }
+
+    // ==================== TEST 11: Remote CMD — PING/PONG ====================
+
+    #[tokio::test]
+    async fn test_remote_cmd_ping_pong() {
+        println!("\n=== TEST: Remote CMD — PING/PONG ===");
+
+        let (mut server, mut client, server_peer_id, client_peer_id) =
+            setup_connected_pair().await;
+
+        // Client sends initial data so server resolves UDP address
+        client.send(client_peer_id, 0, b"ready".to_vec()).await.unwrap();
+        let _ = wait_for_data(&mut server, |_| true, Duration::from_secs(2)).await;
+
+        // Server sends PING
+        server.send(server_peer_id, 0, b"PING".to_vec()).await
+            .expect("Server should send PING");
+        println!("[server] Sent: PING");
+
+        // Client receives PING
+        let result = wait_for_data(&mut client, |t| t == "PING", Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Client should receive PING");
+        println!("[client] Received: PING");
+
+        // Client responds with PONG
+        client.send(client_peer_id, 0, b"PONG".to_vec()).await
+            .expect("Client should send PONG");
+        println!("[client] Sent: PONG");
+
+        // Server receives PONG
+        let result = wait_for_data(&mut server, |t| t == "PONG", Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Server should receive PONG");
+        println!("[server] Received: PONG");
+
+        println!("[OK] PING/PONG test passed\n");
+    }
+
+    // ==================== TEST 12: Remote CMD — Error response ====================
+
+    #[tokio::test]
+    async fn test_remote_cmd_error_response() {
+        println!("\n=== TEST: Remote CMD — Error Response ===");
+
+        let (mut server, mut client, server_peer_id, client_peer_id) =
+            setup_connected_pair().await;
+
+        // Client sends initial data so server resolves UDP address
+        client.send(client_peer_id, 0, b"ready".to_vec()).await.unwrap();
+        let _ = wait_for_data(&mut server, |_| true, Duration::from_secs(2)).await;
+
+        // Server sends a command that writes to stderr
+        let cmd = b"CMD:echo error_output >&2".to_vec();
+        server.send(server_peer_id, 0, cmd).await
+            .expect("Server should send CMD");
+        println!("[server] Sent: CMD:echo error_output >&2");
+
+        // Client receives and executes
+        let result = wait_for_data(&mut client, |t| t.starts_with("CMD:"), Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Client should receive CMD");
+        let (_, _, data) = result.unwrap();
+        let cmd_str = String::from_utf8_lossy(&data)
+            .strip_prefix("CMD:").unwrap().trim().to_string();
+
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd_str)
+            .output()
+            .expect("Failed to execute");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(!stderr.is_empty(), "Command should produce stderr output");
+        let response = format!("ERR:{}", stderr.trim_end());
+        println!("[client] Sending: {}", response);
+        client.send(client_peer_id, 0, response.into_bytes()).await.unwrap();
+
+        // Server receives ERR response
+        let result = wait_for_data(&mut server, |t| t.starts_with("ERR:"), Duration::from_secs(2)).await;
+        assert!(result.is_some(), "Server should receive ERR from client");
+        let (_, _, data) = result.unwrap();
+        let text = String::from_utf8_lossy(&data);
+        println!("[server] Received: {}", text);
+        assert!(text.contains("error_output"), "Error output should contain 'error_output'");
+
+        println!("[OK] Error response test passed\n");
+    }
+
+    // ==================== TEST 13: Remote CMD — Broadcast to multiple clients ====================
+
+    #[tokio::test]
+    async fn test_remote_cmd_broadcast() {
+        println!("\n=== TEST: Remote CMD — Broadcast to Multiple Clients ===");
+
+        let (certs, key) = gen_certs();
+        let udp_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let tcp_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+
+        let server = Arc::new(Mutex::new(
+            SecureSocket::bind_server(udp_addr, tcp_addr, certs, key).await.unwrap()
+        ));
+        let actual_tcp = server.lock().await.local_tcp_addr().unwrap().unwrap();
+
+        // Connect 2 clients
+        let mut clients = Vec::new();
+        let mut client_peer_ids = Vec::new();
+        let mut server_peer_ids = Vec::new();
+
+        for i in 0..2 {
+            let server_clone = server.clone();
+            let server_handle = tokio::spawn(async move {
+                let mut srv = server_clone.lock().await;
+                let events = srv.poll().await.expect("Server poll failed");
+                events.iter().find_map(|e| {
+                    if let SecureEvent::Connected(id) = e { Some(*id) } else { None }
+                })
+            });
+
+            let mut client = SecureSocket::connect(actual_tcp).await.unwrap();
+            let cpid = client.poll().await.unwrap().iter().find_map(|e| {
+                if let SecureEvent::Connected(id) = e { Some(*id) } else { None }
+            }).unwrap();
+
+            let spid = server_handle.await.unwrap().expect("Server should accept");
+            println!("[client {}] connected, peer_id={}", i, cpid);
+
+            client_peer_ids.push(cpid);
+            server_peer_ids.push(spid);
+            clients.push(client);
+        }
+
+        // Each client sends "ready" to resolve UDP address
+        for (i, client) in clients.iter_mut().enumerate() {
+            client.send(client_peer_ids[i], 0, b"ready".to_vec()).await.unwrap();
+        }
+
+        // Server consumes the "ready" messages
+        {
+            let mut srv = server.lock().await;
+            let mut count = 0;
+            for _ in 0..50 {
+                let events = srv.poll().await.unwrap();
+                for event in &events {
+                    if let SecureEvent::Data(_, _, _) = event { count += 1; }
+                }
+                if count >= 2 { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(count, 2, "Server should receive 2 ready messages");
+        }
+
+        // Server broadcasts CMD to all clients
+        {
+            let mut srv = server.lock().await;
+            for &spid in &server_peer_ids {
+                srv.send(spid, 0, b"CMD:echo broadcast_test".to_vec()).await.unwrap();
+            }
+            println!("[server] Broadcast CMD:echo broadcast_test to {} clients", server_peer_ids.len());
+        }
+
+        // Both clients receive the command and respond
+        for (i, client) in clients.iter_mut().enumerate() {
+            let result = wait_for_data(client, |t| t.starts_with("CMD:"), Duration::from_secs(2)).await;
+            assert!(result.is_some(), "Client {} should receive CMD", i);
+
+            let (_, _, data) = result.unwrap();
+            let cmd_str = String::from_utf8_lossy(&data)
+                .strip_prefix("CMD:").unwrap().trim().to_string();
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd_str)
+                .output()
+                .expect("Execute failed");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let response = format!("OUT:{}", stdout.trim_end());
+            println!("[client {}] Responding: {}", i, response);
+            client.send(client_peer_ids[i], 0, response.into_bytes()).await.unwrap();
+        }
+
+        // Server receives responses from both clients
+        {
+            let mut srv = server.lock().await;
+            let mut responses = 0;
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(3) {
+                let events = srv.poll().await.unwrap();
+                for event in &events {
+                    if let SecureEvent::Data(peer_id, _, data) = event {
+                        let text = String::from_utf8_lossy(data);
+                        if text.starts_with("OUT:") && text.contains("broadcast_test") {
+                            println!("[server] Response from client (peer {}): {}", peer_id, text);
+                            responses += 1;
+                        }
+                    }
+                }
+                if responses >= 2 { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(responses, 2, "Server should receive responses from both clients");
+        }
+
+        println!("[OK] Broadcast test passed\n");
+    }
+
+    // ==================== TEST 14: Disconnect twice (should fail gracefully) ====================
 
     #[tokio::test]
     async fn test_double_disconnect() {

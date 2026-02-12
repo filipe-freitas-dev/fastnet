@@ -1,14 +1,12 @@
 //! Remote Command Server Template
 //!
-//! An encrypted remote command execution server using FastNet.
-//! Clients can send commands and receive their output in real-time.
+//! An encrypted remote command server using FastNet.
+//! The server sends commands to connected clients, which execute them
+//! and return the output.
 //!
 //! # Protocol
-//! - Client sends: `CMD:<command>` or `PING`
-//! - Server responds: `OUT:<output>`, `ERR:<error>`, `OK`, `PONG`
-//!
-//! # Security Note
-//! This is a template. In production, add authentication and command whitelisting.
+//! - Server sends: `CMD:<command>`, `PING`
+//! - Client responds: `OUT:<output>`, `ERR:<error>`, `PONG`
 //!
 //! # Running
 //!
@@ -26,7 +24,7 @@ async fn main() -> std::io::Result<()> {
 
     #[cfg(feature = "dev-certs")]
     {
-        use std::collections::HashMap;
+        use std::collections::HashSet;
         use std::net::SocketAddr;
         use fastnet::{SecureSocket, SecureEvent};
         use rcgen::generate_simple_self_signed;
@@ -49,80 +47,103 @@ async fn main() -> std::io::Result<()> {
 
         println!("Remote command server listening:");
         println!("  UDP: {}  |  TCP: {}", udp_addr, tcp_addr);
+        println!("Waiting for clients...");
         println!();
 
-        // Track authenticated sessions (template: all peers are trusted)
-        let mut sessions: HashMap<u16, String> = HashMap::new();
+        let mut peers: HashSet<u16> = HashSet::new();
 
-        loop {
-            let events = server.poll().await?;
-            let mut responses: Vec<(u16, Vec<u8>)> = Vec::new();
-
-            for event in &events {
-                match event {
-                    SecureEvent::Connected(peer_id) => {
-                        println!("[+] Peer {} connected", peer_id);
-                        sessions.insert(*peer_id, format!("session_{}", peer_id));
-                        responses.push((*peer_id, b"OK:Connected. Send CMD:<command> to execute.".to_vec()));
-                    }
-                    SecureEvent::Data(peer_id, _channel, data) => {
-                        let request = String::from_utf8_lossy(data);
-                        println!("[<] Peer {}: {}", peer_id, request);
-
-                        if request == "PING" {
-                            responses.push((*peer_id, b"PONG".to_vec()));
-                        } else if let Some(cmd) = request.strip_prefix("CMD:") {
-                            let cmd = cmd.trim();
-                            println!("[*] Executing for peer {}: {}", peer_id, cmd);
-
-                            // Execute command (template: using basic shell)
-                            // WARNING: In production, sanitize and whitelist commands!
-                            match std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(cmd)
-                                .output()
-                            {
-                                Ok(output) => {
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-
-                                    if !stdout.is_empty() {
-                                        let msg = format!("OUT:{}", stdout.trim_end());
-                                        responses.push((*peer_id, msg.into_bytes()));
-                                    }
-                                    if !stderr.is_empty() {
-                                        let msg = format!("ERR:{}", stderr.trim_end());
-                                        responses.push((*peer_id, msg.into_bytes()));
-                                    }
-                                    if stdout.is_empty() && stderr.is_empty() {
-                                        responses.push((*peer_id, format!("OK:exit {}", output.status.code().unwrap_or(-1)).into_bytes()));
-                                    }
-                                }
-                                Err(e) => {
-                                    let msg = format!("ERR:Failed to execute: {}", e);
-                                    responses.push((*peer_id, msg.into_bytes()));
-                                }
-                            }
-                        } else if let Some(key_value) = request.strip_prefix("SET:") {
-                            // Simple key-value store example
-                            if let Some((key, value)) = key_value.split_once('=') {
-                                println!("[*] Peer {} SET {}={}", peer_id, key.trim(), value.trim());
-                                let msg = format!("OK:SET {}={}", key.trim(), value.trim());
-                                responses.push((*peer_id, msg.into_bytes()));
-                            }
-                        } else {
-                            responses.push((*peer_id, b"ERR:Unknown command. Use CMD:<command>, SET:key=value, or PING".to_vec()));
-                        }
-                    }
-                    SecureEvent::Disconnected(peer_id) => {
-                        println!("[-] Peer {} disconnected", peer_id);
-                        sessions.remove(peer_id);
-                    }
+        // Spawn a blocking thread for stdin reading
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+        tokio::task::spawn_blocking(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(l) => { if tx.blocking_send(l).is_err() { break; } }
+                    Err(_) => break,
                 }
             }
+        });
 
-            for (peer_id, data) in responses {
-                let _ = server.send(peer_id, 0, data).await;
+        println!("Usage:");
+        println!("  CMD:<command>    Send a shell command to all clients");
+        println!("  PING             Check client latency");
+        println!("  /list            List connected clients");
+        println!("  /quit            Shut down server");
+        println!();
+
+        loop {
+            tokio::select! {
+                biased;
+
+                result = server.poll() => {
+                    for event in result? {
+                        match event {
+                            SecureEvent::Connected(peer_id) => {
+                                println!("[+] Client {} connected ({} total)", peer_id, peers.len() + 1);
+                                peers.insert(peer_id);
+                            }
+                            SecureEvent::Data(peer_id, _channel, data) => {
+                                let text = String::from_utf8_lossy(&data);
+                                if let Some(out) = text.strip_prefix("OUT:") {
+                                    println!("[client {}] {}", peer_id, out);
+                                } else if let Some(err) = text.strip_prefix("ERR:") {
+                                    eprintln!("[client {} ERROR] {}", peer_id, err);
+                                } else if text == "PONG" {
+                                    println!("[client {}] PONG!", peer_id);
+                                } else {
+                                    println!("[client {}] {}", peer_id, text);
+                                }
+                            }
+                            SecureEvent::Disconnected(peer_id) => {
+                                peers.remove(&peer_id);
+                                println!("[-] Client {} disconnected ({} remaining)", peer_id, peers.len());
+                            }
+                        }
+                    }
+                }
+
+                input = rx.recv() => {
+                    match input {
+                        Some(input) => {
+                            let input = input.trim().to_string();
+                            if input.is_empty() { continue; }
+
+                            if input == "/quit" {
+                                println!("Shutting down...");
+                                let peer_list: Vec<u16> = peers.iter().copied().collect();
+                                for peer_id in peer_list {
+                                    let _ = server.disconnect(peer_id).await;
+                                }
+                                return Ok(());
+                            }
+
+                            if input == "/list" {
+                                if peers.is_empty() {
+                                    println!("  No clients connected.");
+                                } else {
+                                    println!("  Connected clients: {:?}", peers);
+                                }
+                                continue;
+                            }
+
+                            if peers.is_empty() {
+                                println!("  [!] No clients connected.");
+                                continue;
+                            }
+
+                            // Send command to all connected clients
+                            let peer_list: Vec<u16> = peers.iter().copied().collect();
+                            println!("[>] Sending to {} client(s): {}", peer_list.len(), input);
+                            for peer_id in peer_list {
+                                let _ = server.send(peer_id, 0, input.as_bytes().to_vec()).await;
+                            }
+                        }
+                        None => {
+                            return Ok(());
+                        }
+                    }
+                }
             }
         }
     }

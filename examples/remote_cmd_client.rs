@@ -1,7 +1,14 @@
 //! Remote Command Client Template
 //!
-//! An encrypted client that sends commands to the remote command server
-//! and displays the results.
+//! An encrypted client that receives commands from the server,
+//! executes them locally, and returns the output.
+//!
+//! # Protocol
+//! - Server sends: `CMD:<command>`, `PING`
+//! - Client responds: `OUT:<output>`, `ERR:<error>`, `PONG`
+//!
+//! # Security Note
+//! This is a template. In production, add command whitelisting and validation.
 //!
 //! # Running
 //!
@@ -47,120 +54,71 @@ async fn main() -> std::io::Result<()> {
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
 
-        // Read the welcome message
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        for event in client.poll().await? {
-            if let SecureEvent::Data(_, _, data) = event {
-                println!("  {}", String::from_utf8_lossy(&data));
-            }
-        }
-
+        println!("Connected! Waiting for commands from server...");
+        println!("(The server will send commands for this client to execute)");
         println!();
-        println!("Usage:");
-        println!("  CMD:<command>    Execute a shell command");
-        println!("  SET:key=value    Set a key-value pair");
-        println!("  PING             Check server latency");
-        println!("  /quit            Disconnect");
-        println!();
-
-        // Spawn a blocking thread for stdin reading
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
-        tokio::task::spawn_blocking(move || {
-            use std::io::BufRead;
-            let stdin = std::io::stdin();
-            for line in stdin.lock().lines() {
-                match line {
-                    Ok(l) => { if tx.blocking_send(l).is_err() { break; } }
-                    Err(_) => break,
-                }
-            }
-        });
 
         loop {
-            tokio::select! {
-                biased;
+            for event in client.poll().await? {
+                let mut responses: Vec<Vec<u8>> = Vec::new();
 
-                result = client.poll() => {
-                    for event in result? {
-                        match event {
-                            SecureEvent::Data(_, _, data) => {
-                                let text = String::from_utf8_lossy(&data);
-                                if let Some(out) = text.strip_prefix("OUT:") {
-                                    println!("{}", out);
-                                } else if let Some(err) = text.strip_prefix("ERR:") {
-                                    eprintln!("[ERROR] {}", err);
-                                } else if text == "PONG" {
-                                    println!("  PONG!");
-                                } else if let Some(ok) = text.strip_prefix("OK:") {
-                                    println!("  [OK] {}", ok);
-                                } else {
-                                    println!("  {}", text);
-                                }
-                            }
-                            SecureEvent::Disconnected(_) => {
-                                println!("\nDisconnected from server.");
-                                return Ok(());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                match event {
+                    SecureEvent::Data(_, _channel, data) => {
+                        let request = String::from_utf8_lossy(&data);
+                        println!("[server] {}", request);
 
-                input = rx.recv() => {
-                    match input {
-                        Some(input) => {
-                            let input = input.trim().to_string();
-                            if input.is_empty() { continue; }
+                        if request == "PING" {
+                            responses.push(b"PONG".to_vec());
+                        } else if let Some(cmd) = request.strip_prefix("CMD:") {
+                            let cmd = cmd.trim();
+                            println!("[exec] {}", cmd);
 
-                            if input == "/quit" {
-                                client.disconnect(peer_id).await?;
-                                println!("Disconnected.");
-                                return Ok(());
-                            }
+                            // Execute command locally
+                            // WARNING: In production, sanitize and whitelist commands!
+                            match std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(cmd)
+                                .output()
+                            {
+                                Ok(output) => {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
 
-                            let start = std::time::Instant::now();
-                            client.send(peer_id, 0, input.into_bytes()).await?;
-
-                            // Wait for response
-                            let timeout = Duration::from_secs(10);
-                            let mut got_response = false;
-                            while start.elapsed() < timeout {
-                                for event in client.poll().await? {
-                                    match event {
-                                        SecureEvent::Data(_, _, data) => {
-                                            let text = String::from_utf8_lossy(&data);
-                                            if let Some(out) = text.strip_prefix("OUT:") {
-                                                println!("{}", out);
-                                            } else if let Some(err) = text.strip_prefix("ERR:") {
-                                                eprintln!("[ERROR] {}", err);
-                                            } else if text == "PONG" {
-                                                println!("  PONG! ({:?})", start.elapsed());
-                                            } else if let Some(ok) = text.strip_prefix("OK:") {
-                                                println!("  [OK] {}", ok);
-                                            } else {
-                                                println!("  {}", text);
-                                            }
-                                            got_response = true;
-                                        }
-                                        SecureEvent::Disconnected(_) => {
-                                            println!("\nServer disconnected.");
-                                            return Ok(());
-                                        }
-                                        _ => {}
+                                    if !stdout.is_empty() {
+                                        let msg = format!("OUT:{}", stdout.trim_end());
+                                        println!("{}", stdout.trim_end());
+                                        responses.push(msg.into_bytes());
+                                    }
+                                    if !stderr.is_empty() {
+                                        let msg = format!("ERR:{}", stderr.trim_end());
+                                        eprintln!("[stderr] {}", stderr.trim_end());
+                                        responses.push(msg.into_bytes());
+                                    }
+                                    if stdout.is_empty() && stderr.is_empty() {
+                                        let msg = format!("OUT:exit {}", output.status.code().unwrap_or(-1));
+                                        responses.push(msg.into_bytes());
                                     }
                                 }
-                                if got_response { break; }
-                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                Err(e) => {
+                                    let msg = format!("ERR:Failed to execute: {}", e);
+                                    eprintln!("[error] {}", e);
+                                    responses.push(msg.into_bytes());
+                                }
                             }
-                            if !got_response {
-                                eprintln!("  [TIMEOUT] No response after {:?}", timeout);
-                            }
+                        } else {
+                            println!("[?] Unknown: {}", request);
+                            responses.push(format!("ERR:Unknown command: {}", request).into_bytes());
                         }
-                        None => {
-                            client.disconnect(peer_id).await?;
-                            return Ok(());
+
+                        for resp in responses {
+                            let _ = client.send(peer_id, 0, resp).await;
                         }
                     }
+                    SecureEvent::Disconnected(_) => {
+                        println!("\nServer disconnected.");
+                        return Ok(());
+                    }
+                    _ => {}
                 }
             }
         }
