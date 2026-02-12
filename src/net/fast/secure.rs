@@ -786,12 +786,14 @@ impl SecureSocket {
 
         let addr = peer.peer.address;
 
-        // Send disconnect packet to notify the other end
-        let header = peer.peer.prepare_header(0, PacketFlag::Disconnect as u8);
-        header.write_to(&mut self.packet_buf[..HEADER_SIZE]);
+        // Send disconnect packet multiple times for reliability (UDP may drop packets)
+        for _ in 0..3 {
+            let header = peer.peer.prepare_header(0, PacketFlag::Disconnect as u8);
+            header.write_to(&mut self.packet_buf[..HEADER_SIZE]);
 
-        if let Some(ct_len) = peer.cipher.seal(&self.packet_buf[..HEADER_SIZE], &mut self.send_buf[..]) {
-            self.socket.send_to(&self.send_buf[..ct_len], addr).await?;
+            if let Some(ct_len) = peer.cipher.seal(&self.packet_buf[..HEADER_SIZE], &mut self.send_buf[..]) {
+                let _ = self.socket.send_to(&self.send_buf[..ct_len], addr).await;
+            }
         }
 
         // Remove peer locally
